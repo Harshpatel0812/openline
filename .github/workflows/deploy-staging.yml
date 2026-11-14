@@ -1,0 +1,63 @@
+name: Deploy to staging
+
+# Runs on every merge to main once infrastructure exists.
+# Turn on by setting repository variable DEPLOY_ENABLED=true (Settings → Variables).
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC → AWS, no long-lived keys
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 30
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_STAGING_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images
+        run: |
+          docker build -f infra/docker/node-service.Dockerfile --build-arg APP=api    -t $ECR_REGISTRY/openline-api:$IMAGE_TAG .
+          docker build -f infra/docker/node-service.Dockerfile --build-arg APP=worker -t $ECR_REGISTRY/openline-worker:$IMAGE_TAG .
+          docker build -f infra/docker/web.Dockerfile                                -t $ECR_REGISTRY/openline-web:$IMAGE_TAG .
+          for svc in api worker web; do docker push $ECR_REGISTRY/openline-$svc:$IMAGE_TAG; done
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform apply (staging)
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET_STAGING }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+          terraform apply -input=false -auto-approve \
+            -var "aws_region=${{ vars.AWS_REGION }}" \
+            -var "image_tag=$IMAGE_TAG"
+
+      - name: Run database migrations
+        run: echo "TODO(OL-E1) run 'prisma migrate deploy' as a one-off ECS task"
+
+      - name: Smoke test
+        run: curl --fail --retry 10 --retry-delay 10 "${{ vars.STAGING_API_URL }}/health"

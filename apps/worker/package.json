@@ -1,0 +1,23 @@
+{
+  "name": "@openline/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Background jobs (BullMQ): sequence sender, reply sync, AI, call processing.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openline/compliance": "workspace:*",
+    "@openline/shared": "workspace:*",
+    "bullmq": "^5.34.0"
+  },
+  "devDependencies": {
+    "@openline/config": "workspace:*",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

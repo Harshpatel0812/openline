@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+coverage
+pnpm-lock.yaml
+playwright-report
+test-results
+next-env.d.ts
+infra/terraform/**/.terraform

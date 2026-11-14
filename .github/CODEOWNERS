@@ -1,0 +1,10 @@
+# Every change needs the owner's review. Sensitive areas will also require the
+# engineer once they join (add their handle next to these paths).
+*                         @Harshpatel0812
+
+/packages/compliance/     @Harshpatel0812
+/packages/db/             @Harshpatel0812
+/packages/email/          @Harshpatel0812
+/packages/ai/             @Harshpatel0812
+/infra/                   @Harshpatel0812
+/.github/                 @Harshpatel0812

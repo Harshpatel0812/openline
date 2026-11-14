@@ -1,0 +1,52 @@
+name: Release to production
+
+# Manual only. The "production" environment requires Harsh's approval
+# (Settings → Environments → production → Required reviewers).
+# Promotes the exact image that already passed staging — nothing is rebuilt.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Commit SHA that passed staging"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_tag }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PROD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform apply (production, blue/green)
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET_PROD }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+          terraform apply -input=false -auto-approve \
+            -var "aws_region=${{ vars.AWS_REGION }}" \
+            -var "image_tag=${{ inputs.image_tag }}"
+
+      - name: Health check (auto-rollback is handled by the ECS deployment circuit breaker)
+        run: curl --fail --retry 15 --retry-delay 20 "${{ vars.PROD_API_URL }}/health"

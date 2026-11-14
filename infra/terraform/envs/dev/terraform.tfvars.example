@@ -1,0 +1,2 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+aws_region = "REPLACE_ME" # region decision pending

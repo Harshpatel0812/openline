@@ -1,0 +1,139 @@
+// Openline core schema (MVP foundation).
+// Rules:
+//  - Every tenant table has workspace_id and a row-level security policy (see rls.sql).
+//  - Changes are migrations only, expand-then-contract (see docs/adr/0001).
+//  - Tokens and secrets are stored encrypted (KMS envelope encryption), never in plain text.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  owner
+  admin
+  manager
+  rep
+}
+
+enum ConsentBasis {
+  express
+  implied_purchase
+  implied_inquiry
+  legitimate_interest
+  none
+}
+
+model Workspace {
+  id            String   @id @default(uuid()) @db.Uuid
+  name          String
+  plan          String   @default("trial")
+  dataRegion    String   @default("us") @map("data_region")
+  createdAt     DateTime @default(now()) @map("created_at")
+  users         User[]
+  companies     Company[]
+  contacts      Contact[]
+  suppressions  Suppression[]
+
+  @@map("workspaces")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  email        String
+  role         Role      @default(rep)
+  authProvider String    @map("auth_provider")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contacts     Contact[] @relation("ContactOwner")
+
+  @@unique([workspaceId, email])
+  @@map("users")
+}
+
+model Company {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  name        String
+  domain      String?
+  custom      Json      @default("{}")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contacts    Contact[]
+
+  @@unique([workspaceId, domain])
+  @@map("companies")
+}
+
+model Contact {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  companyId   String?   @map("company_id") @db.Uuid
+  ownerId     String?   @map("owner_id") @db.Uuid
+  email       String
+  firstName   String?   @map("first_name")
+  lastName    String?   @map("last_name")
+  title       String?
+  phone       String?
+  timeZone    String?   @map("time_zone")
+  country     String?
+  healthScore Int       @default(100) @map("health_score")
+  custom      Json      @default("{}")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner       User?     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  consents    Consent[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, companyId])
+  @@map("contacts")
+}
+
+model Consent {
+  id          String       @id @default(uuid()) @db.Uuid
+  workspaceId String       @map("workspace_id") @db.Uuid
+  contactId   String       @map("contact_id") @db.Uuid
+  channel     String       @default("email")
+  basis       ConsentBasis
+  source      String
+  obtainedAt  DateTime     @map("obtained_at")
+  expiresAt   DateTime?    @map("expires_at")
+  withdrawnAt DateTime?    @map("withdrawn_at")
+  contact     Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, contactId])
+  @@map("consents")
+}
+
+model Suppression {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  value       String // "jane@acme.com" or "@acme.com"
+  reason      String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, value])
+  @@map("suppressions")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  actorId     String?  @map("actor_id") @db.Uuid
+  action      String
+  entity      String
+  entityId    String?  @map("entity_id")
+  before      Json?
+  after       Json?
+  at          DateTime @default(now())
+
+  @@index([workspaceId, at])
+  @@map("audit_log")
+}

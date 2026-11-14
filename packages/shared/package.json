@@ -1,0 +1,21 @@
+{
+  "name": "@openline/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Types, Zod validation schemas and constants shared by every app.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@openline/config": "workspace:*",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

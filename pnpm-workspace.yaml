@@ -1,0 +1,18 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tests/e2e"
+
+# Security overrides for vulnerable transitive dependencies (remove when upstream catches up).
+overrides:
+  postcss: ">=8.5.23"
+
+# Only these dependencies may run install scripts (supply-chain safety).
+onlyBuiltDependencies:
+  - "@nestjs/core"
+  - "esbuild"
+  - "msgpackr-extract"
+  - "prisma"
+  - "@prisma/engines"
+  - "@prisma/client"
+  - "sharp"

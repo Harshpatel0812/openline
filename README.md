@@ -6,22 +6,23 @@ The outreach CRM that keeps you out of spam, out of trouble, and true to your wo
 
 ## Quick start (5 minutes)
 
-Prerequisites: Node 22 (`nvm use`), pnpm 10 (`corepack enable`), Docker.
+Prerequisites: Node 22 (`nvm use`) and pnpm 10 (`corepack enable`). Docker is optional.
 
 ```bash
 pnpm install
-cp .env.example .env
-pnpm services:up      # Postgres, Redis, Mailpit
 pnpm build
-pnpm dev              # web on :3000, api on :4000
+pnpm dev              # web on :3000, API on :4000 (database in .data/, created automatically)
 ```
 
-Check it works:
+Open http://localhost:3000, click **Start free trial**, and create your workspace.
 
-- http://localhost:3000 — product app
+Check the API directly:
+
 - http://localhost:4000/health — API health
 - http://localhost:4000/v1/compliance/send-window?timeZone=America/New_York
-- http://localhost:8025 — Mailpit (every local email lands here)
+
+Optional: `pnpm services:up` starts real Postgres, Redis and Mailpit (http://localhost:8025, every
+local email lands there). Point `DATABASE_URL` in `.env` at Postgres to use it.
 
 ## Everyday commands
 
@@ -41,11 +42,11 @@ for a new developer's first day.
 
 ## CI/CD
 
-| Workflow             | When                           | What                                                                                                         |
-| -------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `ci.yml`             | Every PR and push to `main`    | Lint, format, typecheck, tests (with Postgres + Redis), build, Prisma validate, SAST, secret scan, e2e smoke |
-| `deploy-staging.yml` | Merge to `main` (once enabled) | Build images → ECR → Terraform → deploy → smoke test                                                         |
-| `deploy-prod.yml`    | Manual, with approval          | Promote the exact staging image to production                                                                |
+| Workflow             | When                           | What                                                                                                                                 |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ci.yml`             | Every PR and push to `main`    | Lint, format, typecheck, tests (with Postgres + Redis), build, tenant-isolation tests on real Postgres, SAST, secret scan, e2e smoke |
+| `deploy-staging.yml` | Merge to `main` (once enabled) | Build images → ECR → Terraform → deploy → smoke test                                                                                 |
+| `deploy-prod.yml`    | Manual, with approval          | Promote the exact staging image to production                                                                                        |
 
 Deploys stay off until the repository variable `DEPLOY_ENABLED` is set to `true` and the AWS
 roles exist (see `infra/terraform/README.md`).

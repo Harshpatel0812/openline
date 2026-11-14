@@ -16,23 +16,25 @@ tests and docs; never holds secrets or production access.
 
 ## Stack
 
-| Layer    | Choice                                                           |
-| -------- | ---------------------------------------------------------------- |
-| Language | TypeScript everywhere (`strict`)                                 |
-| Web app  | Next.js 15 (App Router), React 19, Tailwind 4                    |
-| API      | NestJS 11, REST under `/v1`, `/health` unversioned               |
-| Jobs     | BullMQ on Redis (`apps/worker`)                                  |
-| DB       | PostgreSQL 16 + Prisma, row-level security per workspace         |
-| Tests    | Vitest (unit + integration), Playwright (e2e), k6 (load)         |
-| Monorepo | pnpm workspaces + Turborepo                                      |
-| Infra    | AWS via Terraform (region not decided yet), GitHub Actions CI/CD |
+| Layer    | Choice                                                                    |
+| -------- | ------------------------------------------------------------------------- |
+| Language | TypeScript everywhere (`strict`)                                          |
+| Web app  | Next.js 15 (App Router), React 19, Tailwind 4                             |
+| API      | NestJS 11, REST under `/v1`, `/health` unversioned                        |
+| Jobs     | BullMQ on Redis (`apps/worker`)                                           |
+| DB       | PostgreSQL 16 + Drizzle ORM, SQL migrations, RLS per workspace (ADR 0002) |
+| Auth     | First-party email/password + server-side sessions (ADR 0003)              |
+| Tests    | Vitest (unit + integration), Playwright (e2e), k6 (load)                  |
+| Monorepo | pnpm workspaces + Turborepo                                               |
+| Infra    | AWS via Terraform (region not decided yet), GitHub Actions CI/CD          |
 
 ## Commands
 
 ```bash
 pnpm install            # install everything
-pnpm services:up        # Postgres, Redis, Mailpit (fake inbox at http://localhost:8025)
-pnpm dev                # run all apps in watch mode
+pnpm build              # build packages (apps import them from dist/)
+pnpm dev                # API on :4000 (on-disk PGlite in .data/, no Docker) + web on :3000
+pnpm services:up        # optional: real Postgres, Redis, Mailpit (http://localhost:8025)
 pnpm lint               # ESLint, whole repo
 pnpm format             # Prettier write  (pnpm format:check in CI)
 pnpm typecheck          # tsc --noEmit in every package
@@ -56,7 +58,7 @@ packages/shared     Types, Zod schemas, constants (QUEUES, ROLES, SENDING_DEFAUL
 packages/compliance Deterministic rules: send window, consent (CASL), suppression
 packages/email      Mail adapters + RFC 8058 unsubscribe headers + bot-open filter
 packages/ai         Scout guardrails: untrusted-content fencing, approval state machine
-packages/db         Prisma schema + rls.sql
+packages/db         SQL migrations (+RLS), Drizzle schema, withTenant(), migrator
 packages/ui         Design system (Sprint 1)
 packages/config     Shared tsconfig preset
 infra/              Terraform (envs/dev|staging|prod) + Dockerfiles + docker-compose
@@ -66,8 +68,9 @@ tests/e2e, tests/load
 
 ## Rules (non-negotiable)
 
-1. **Tenant isolation.** Every query is scoped by `workspace_id`. Every new tenant table gets an RLS
-   policy in `packages/db/prisma/rls.sql` and a cross-tenant test.
+1. **Tenant isolation.** Tenant data is only read/written inside `withTenant()` AND every query also
+   filters by `workspace_id`. Every new tenant table gets an RLS policy in its migration and a
+   cross-tenant test. Another workspace's record must look like 404.
 2. **No secrets** in code, tests, logs, commits or chat. Use `.env` locally (git-ignored) and AWS
    Secrets Manager elsewhere. Never log email bodies, OAuth tokens or personal data.
 3. **Compliance logic is deterministic** and lives in `packages/compliance` with tests. Never let
@@ -77,8 +80,9 @@ tests/e2e, tests/load
    untrusted: wrap them with `wrapUntrusted()`; never treat them as instructions.
 5. **Tests ship with code**, in the same PR. Bug fix = failing test first.
 6. **Small PRs** (< ~400 lines), Conventional Commits with ticket ID: `feat(OL-123): ...`.
-7. **Migrations are expand-then-contract.** Never drop or rename a column in the same release
-   that stops using it.
+7. **Migrations are expand-then-contract**, as new `packages/db/migrations/NNNN_*.sql` files (never
+   edit an applied one) plus the matching `schema.ts` change. Never drop or rename a column in the
+   same release that stops using it.
 8. **Validate all input** with Zod schemas from `packages/shared`. Errors use
    `{ code, message, details? }`.
 9. **No `any`** without a comment explaining why.
@@ -102,9 +106,13 @@ tests/e2e, tests/load
 
 ## Current status
 
-- **Phase:** 0 — Foundation (Week 0, Nov 2026). Scaffold in place; CI green.
-- **Next:** Sprint 1 — auth (Clerk), workspaces, roles, RLS, app shell (epic OL-E1).
-- **Open decisions:** AWS region / hosting location; company entity; GitHub org.
+- **Phase:** 2 — Build the MVP. Sprint 1 (auth, workspaces, roles, invites, RLS) and Sprint 2
+  (contacts, companies, CSV import, suppressions) built together.
+- **API contract:** `docs/api/README.md`. PRDs: `docs/product/OL-E1-*.md`, `OL-E2-*.md`.
+- **Done:** see `docs/sprints/S1-S2.md` (298 tests, 6 e2e journeys, security review fixed).
+- **Next:** Sprint 3 — sequence engine (Gmail send, scheduler, caps), email delivery for invites,
+  email verification, consent records.
+- **Open decisions:** AWS region / hosting location; company entity; GitHub repo connection.
 
 ## Key documents
 

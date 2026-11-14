@@ -18,7 +18,7 @@ context.
 
 ## Decision
 
-Option 1. Next.js (web), NestJS (API), BullMQ (jobs), PostgreSQL + Prisma (data, with row-level
+Option 1. Next.js (web), NestJS (API), BullMQ (jobs), PostgreSQL + Drizzle (see ADR 0002; data, with row-level
 security), Vitest/Playwright (tests), Terraform (infra), GitHub Actions (CI/CD). Python is allowed
 only in `services/ml` for v2 models.
 

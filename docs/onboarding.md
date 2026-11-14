@@ -17,6 +17,6 @@
 | A shared type or validation                  | `packages/shared`                                                               |
 | A legal/compliance rule                      | `packages/compliance` + test + note in the PRD                                  |
 | A Scout prompt or guardrail                  | `packages/ai` + eval cases                                                      |
-| A database change                            | `packages/db/prisma/schema.prisma` + migration + RLS policy                     |
+| A database change                            | New `packages/db/migrations/NNNN_*.sql` (+ RLS policy) and matching `schema.ts` |
 | A decision that affects more than one module | `docs/adr/NNNN-title.md`                                                        |
 | An operational procedure                     | `docs/runbooks/`                                                                |

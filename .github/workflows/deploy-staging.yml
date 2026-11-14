@@ -57,7 +57,7 @@ jobs:
             -var "image_tag=$IMAGE_TAG"
 
       - name: Run database migrations
-        run: echo "TODO(OL-E1) run 'prisma migrate deploy' as a one-off ECS task"
+        run: echo "TODO(OL-E1) run 'pnpm --filter @openline/db db:migrate' as a one-off ECS task"
 
       - name: Smoke test
         run: curl --fail --retry 10 --retry-delay 10 "${{ vars.STAGING_API_URL }}/health"

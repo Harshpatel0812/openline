@@ -27,6 +27,9 @@ test-results/
 *.tfvars
 !*.tfvars.example
 
+# Local PGlite database
+.data/
+
 # OS / editors
 .DS_Store
 .idea/

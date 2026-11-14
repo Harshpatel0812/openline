@@ -7,6 +7,7 @@ RUN corepack enable
 WORKDIR /repo
 COPY . .
 RUN pnpm install --frozen-lockfile
+ENV NEXT_OUTPUT=standalone
 RUN pnpm turbo run build --filter=@openline/web...
 
 FROM node:${NODE_VERSION}-alpine AS runtime

@@ -23,3 +23,22 @@ Week 0 / Sprint 1 (epic OL-E1).
 - CI authenticates with GitHub OIDC — no long-lived AWS keys anywhere.
 - Every resource is tagged `project=openline`, `env=<env>`.
 - Databases and Redis live in private subnets only; nothing data-bearing is public.
+
+## Database roles (required before the first production deploy)
+
+The security review requires the API to connect as a role that owns nothing:
+
+| Role             | Login                 | Purpose                                                               |
+| ---------------- | --------------------- | --------------------------------------------------------------------- |
+| `openline_owner` | yes (deploy job only) | Owns tables; runs `pnpm --filter @openline/db db:migrate`             |
+| `openline_app`   | no                    | Created by migration 0001; `NOBYPASSRLS`; the privileges the app gets |
+| `openline_api`   | yes (API + worker)    | `NOINHERIT`, member of `openline_app` only, owns nothing              |
+
+```sql
+CREATE ROLE openline_api LOGIN NOINHERIT NOBYPASSRLS PASSWORD '<from Secrets Manager>';
+GRANT openline_app TO openline_api;
+```
+
+In production `AUTO_MIGRATE` defaults to `false`; migrations run as a one-off task with the owner role.
+The API must only be reachable from the web proxy and load balancer inside the VPC (it trusts
+`X-Forwarded-For` only from private networks). Set `TRUST_LB_FORWARDED_FOR=true` on the web service.

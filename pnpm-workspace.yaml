@@ -12,7 +12,5 @@ onlyBuiltDependencies:
   - "@nestjs/core"
   - "esbuild"
   - "msgpackr-extract"
-  - "prisma"
-  - "@prisma/engines"
-  - "@prisma/client"
+  - "@swc/core"
   - "sharp"

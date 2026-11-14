@@ -2,15 +2,28 @@
   "name": "@openline/db",
   "version": "0.0.0",
   "private": true,
-  "description": "Prisma schema, migrations, seed data and row-level security policies.",
+  "description": "Drizzle schema, SQL migrations with row-level security, and tenant-scoped database access.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "migrations"
+  ],
   "scripts": {
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio",
-    "db:validate": "prisma validate"
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "node dist/cli/migrate.js"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
-    "prisma": "^6.2.0"
+    "@openline/config": "workspace:*",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
   }
 }

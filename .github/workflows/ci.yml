@@ -69,8 +69,10 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Validate database schema
-        run: pnpm --filter @openline/db db:validate
+      - name: Tenant isolation tests on real Postgres 16
+        run: pnpm --filter @openline/db test
+        env:
+          TEST_DATABASE_URL: postgresql://openline:openline@localhost:5432/openline_test
 
       - name: Audit dependencies (fail on high or critical)
         run: pnpm audit --audit-level=high --prod

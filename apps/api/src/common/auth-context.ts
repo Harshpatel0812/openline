@@ -14,6 +14,8 @@ export interface AuthContext {
   workspaceId: string;
   role: Role;
   user: { name: string; email: string };
+  /** True once the user has confirmed their email address. */
+  emailVerified: boolean;
 }
 
 export type AuthedRequest = Request & { auth?: AuthContext };

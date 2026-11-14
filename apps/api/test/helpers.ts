@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { Test } from "@nestjs/testing";
 import type { NestExpressApplication } from "@nestjs/platform-express";
+import { CaptureAdapter, type OutgoingEmail } from "@openline/email";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
 import { configureApp } from "../src/app.factory";
@@ -47,6 +48,11 @@ export function browser(app: NestExpressApplication) {
         .patch(url)
         .set(csrf)
         .send(body ?? {}),
+    put: (url: string, body?: object) =>
+      agent
+        .put(url)
+        .set(csrf)
+        .send(body ?? {}),
     delete: (url: string) => agent.delete(url).set(csrf),
   };
 }
@@ -89,4 +95,58 @@ export async function joinAs(
   });
   if (accepted.status !== 200) throw new Error(`accept failed: ${accepted.status}`);
   return b;
+}
+
+/** Emails captured for `to` (newest last). Needs MAIL_TRANSPORT=capture (the test default). */
+export function sentTo(to: string): OutgoingEmail[] {
+  return CaptureAdapter.outbox.filter((m) => m.to === to);
+}
+
+/** The `?token=` from the newest captured email to `to` whose link contains `path`. */
+export function tokenFromEmail(to: string, path: string): string {
+  const mail = sentTo(to)
+    .reverse()
+    .find((m) => m.text.includes(path));
+  if (!mail) throw new Error(`no ${path} email captured for ${to}`);
+  const match = new RegExp(`${path}\\?token=([A-Za-z0-9_-]+)`).exec(mail.text);
+  if (!match) throw new Error(`no token in ${path} email`);
+  return match[1]!;
+}
+
+/** Signs up and confirms the email address (needed for mailboxes, sequences and enrolling). */
+export async function verifiedSignup(
+  app: NestExpressApplication,
+  overrides: { email?: string; workspaceName?: string; name?: string } = {},
+): Promise<{ b: Browser; email: string }> {
+  const result = await signedUp(app, overrides);
+  const token = tokenFromEmail(result.email, "/verify-email");
+  const res = await browser(app).post("/v1/auth/verify-email", { token });
+  if (res.status !== 200) throw new Error(`verify failed: ${res.status}`);
+  return result;
+}
+
+/** Like joinAs, then confirms the teammate's email (via resend-verification). */
+export async function joinVerifiedAs(
+  app: NestExpressApplication,
+  owner: Browser,
+  role: "admin" | "manager" | "rep",
+): Promise<{ b: Browser; email: string }> {
+  const email = uniqueEmail(role);
+  const res = await owner.post("/v1/invites", { email, role });
+  if (res.status !== 201) throw new Error(`invite failed: ${res.status}`);
+  const token = (res.body.inviteUrl as string).split("/invite/")[1]!;
+  const b = browser(app);
+  const accepted = await b.post("/v1/invites/accept", {
+    token,
+    name: "Teammate",
+    password: PASSWORD,
+  });
+  if (accepted.status !== 200) throw new Error(`accept failed: ${accepted.status}`);
+  const resent = await b.post("/v1/auth/resend-verification");
+  if (resent.status !== 200) throw new Error(`resend failed: ${resent.status}`);
+  const verify = await browser(app).post("/v1/auth/verify-email", {
+    token: tokenFromEmail(email, "/verify-email"),
+  });
+  if (verify.status !== 200) throw new Error(`verify failed: ${verify.status}`);
+  return { b, email };
 }

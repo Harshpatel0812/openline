@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useId, useState, type FormEvent } from "react";
+import { Suspense, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { ContactDto, ContactListDto } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
+import { EnrollDialog } from "@/components/app/enroll-dialog";
 import {
   ContactFields,
   emptyContactValues,
@@ -129,6 +130,42 @@ function ContactsView() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [adding, setAdding] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [selected, setSelected] = useState<Map<string, ContactDto>>(new Map());
+  const [enrolling, setEnrolling] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  // A new search starts a new selection.
+  useEffect(() => setSelected(new Map()), [q]);
+
+  const pageIds = list?.items.map((c) => c.id) ?? [];
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
+  const allOnPage = pageIds.length > 0 && selectedOnPage === pageIds.length;
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedOnPage > 0 && !allOnPage;
+    }
+  }, [selectedOnPage, allOnPage]);
+
+  function toggle(c: ContactDto, on: boolean) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (on) next.set(c.id, c);
+      else next.delete(c.id);
+      return next;
+    });
+  }
+
+  function toggleAll(on: boolean) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const c of list?.items ?? []) {
+        if (on) next.set(c.id, c);
+        else next.delete(c.id);
+      }
+      return next;
+    });
+  }
 
   // Debounced search box → ?q=
   useEffect(() => {
@@ -219,6 +256,23 @@ function ContactsView() {
             className="max-w-md"
           />
         </div>
+        {selected.size > 0 ? (
+          <div
+            role="region"
+            aria-label="Bulk actions"
+            className="flex flex-wrap items-center gap-3 border-b border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm dark:border-indigo-900 dark:bg-indigo-950"
+          >
+            <p className="font-medium text-indigo-900 dark:text-indigo-100" aria-live="polite">
+              {selected.size.toLocaleString()} selected
+            </p>
+            <Button size="sm" onClick={() => setEnrolling(true)}>
+              Add to sequence
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Map())}>
+              Clear selection
+            </Button>
+          </div>
+        ) : null}
 
         {loading && !list ? (
           <LoadingBlock label="Loading contacts" />
@@ -261,6 +315,16 @@ function ContactsView() {
               <Table caption="Contacts">
                 <thead>
                   <tr>
+                    <Th className="w-10">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        aria-label="Select all contacts on this page"
+                        checked={allOnPage}
+                        onChange={(e) => toggleAll(e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-400 accent-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:outline-none"
+                      />
+                    </Th>
                     <Th>Name</Th>
                     <Th>Email</Th>
                     <Th>Company</Th>
@@ -274,8 +338,21 @@ function ContactsView() {
                     <tr
                       key={c.id}
                       onClick={() => router.push(`/app/contacts/${c.id}`)}
-                      className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                      className={
+                        selected.has(c.id)
+                          ? "cursor-pointer bg-indigo-50/60 hover:bg-indigo-50 dark:bg-indigo-950/40"
+                          : "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                      }
                     >
+                      <Td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${contactName(c)}`}
+                          checked={selected.has(c.id)}
+                          onChange={(e) => toggle(c, e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-400 accent-indigo-600 focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:outline-none"
+                        />
+                      </Td>
                       <Td className="font-medium">
                         <Link
                           href={`/app/contacts/${c.id}`}
@@ -318,6 +395,12 @@ function ContactsView() {
         ) : null}
       </Card>
 
+      <EnrollDialog
+        open={enrolling}
+        onClose={() => setEnrolling(false)}
+        contacts={[...selected.values()]}
+        onDone={() => setSelected(new Map())}
+      />
       <AddContactDialog
         open={adding}
         onClose={() => setAdding(false)}

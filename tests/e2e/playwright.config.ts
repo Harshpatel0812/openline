@@ -1,4 +1,38 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+
+// The mail sink speaks STARTTLS with a throwaway certificate made here (never committed). The API
+// trusts it through NODE_EXTRA_CA_CERTS, so certificate checks stay on exactly as in production.
+const tlsDir = join(tmpdir(), "openline-e2e-mail");
+const tlsKey = join(tlsDir, "key.pem");
+const tlsCert = join(tlsDir, "cert.pem");
+if (!process.env.E2E_BASE_URL && !existsSync(tlsCert)) {
+  mkdirSync(tlsDir, { recursive: true });
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-days",
+      "30",
+      "-keyout",
+      tlsKey,
+      "-out",
+      tlsCert,
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    ],
+    { stdio: "ignore" },
+  );
+}
 
 const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 
@@ -26,6 +60,14 @@ export default defineConfig({
     ? undefined
     : [
         {
+          // Local SMTP sink: catches verification and outreach emails; relays nothing.
+          command: "node support/mail-sink.mjs",
+          env: { MAIL_SINK_TLS_KEY: tlsKey, MAIL_SINK_TLS_CERT: tlsCert },
+          url: "http://127.0.0.1:2580/health",
+          reuseExistingServer: !process.env.CI,
+          timeout: 15_000,
+        },
+        {
           command: "node ../../apps/api/dist/main.js",
           url: "http://localhost:4000/health",
           env: {
@@ -33,6 +75,13 @@ export default defineConfig({
             API_PORT: "4000",
             NODE_ENV: "test",
             SIGNUPS_PER_IP_PER_HOUR: "1000",
+            WEB_URL: baseURL,
+            // Every email (ours and outreach) goes to the sink; the engine runs in-process.
+            MAIL_TRANSPORT: "smtp",
+            SMTP_URL: "smtp://127.0.0.1:2525",
+            OUTREACH_TRANSPORT: "sandbox",
+            RUN_SCHEDULER: "true",
+            NODE_EXTRA_CA_CERTS: tlsCert,
           },
           reuseExistingServer: !process.env.CI,
           timeout: 60_000,

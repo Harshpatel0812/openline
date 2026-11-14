@@ -98,4 +98,11 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }
 
-export { proxy as GET, proxy as POST, proxy as PATCH, proxy as DELETE, proxy as HEAD };
+export {
+  proxy as GET,
+  proxy as POST,
+  proxy as PUT,
+  proxy as PATCH,
+  proxy as DELETE,
+  proxy as HEAD,
+};

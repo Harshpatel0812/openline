@@ -2,6 +2,7 @@
 
 import {
   useId,
+  type ComponentProps,
   type InputHTMLAttributes,
   type LabelHTMLAttributes,
   type ReactNode,
@@ -27,8 +28,12 @@ export function Label({ className, ...rest }: LabelHTMLAttributes<HTMLLabelEleme
   );
 }
 
-export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, ...rest }: ComponentProps<"input">) {
   return <input className={cx(control, borderOk, "h-10", className)} {...rest} />;
+}
+
+export function Textarea({ className, ...rest }: ComponentProps<"textarea">) {
+  return <textarea className={cx(control, borderOk, "py-2", className)} {...rest} />;
 }
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {

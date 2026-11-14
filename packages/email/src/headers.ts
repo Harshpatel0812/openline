@@ -4,7 +4,9 @@
  */
 export function buildUnsubscribeHeaders(httpsUrl: string, mailto?: string): Record<string, string> {
   const url = new URL(httpsUrl);
-  if (url.protocol !== "https:") {
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  // Mailbox providers require https; plain http is accepted only for local development.
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
     throw new Error("Unsubscribe URL must use https");
   }
   const targets = [`<${url.toString()}>`];

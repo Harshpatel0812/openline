@@ -11,6 +11,11 @@ import {
   valuesFromContact,
   type ContactFormValues,
 } from "@/components/app/contact-form";
+import {
+  ConsentCard,
+  ContactMessagesCard,
+  ContactSequencesCard,
+} from "@/components/app/contact-sections";
 import { useMe } from "@/components/app/me-context";
 import {
   Alert,
@@ -25,7 +30,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api, ApiError, errorMessage, fieldErrorsFrom } from "@/lib/api";
-import { contactName, formatDate, titleCase } from "@/lib/format";
+import { contactName, formatDate } from "@/lib/format";
 import { useResource } from "@/lib/use-resource";
 
 function DeleteContactDialog({
@@ -227,67 +232,80 @@ export default function ContactDetailPage() {
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader title="Details" />
-          <form onSubmit={onSave} noValidate className="space-y-4 p-5">
-            {formError ? <Alert tone="error">{formError}</Alert> : null}
-            <ContactFields
-              values={values}
-              errors={errors}
-              disabled={saving}
-              onChange={(k, v) => setValues((prev) => (prev ? { ...prev, [k]: v } : prev))}
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                variant="secondary"
-                disabled={!dirty || saving}
-                onClick={() => {
-                  setValues(valuesFromContact(contact));
-                  setErrors({});
-                  setFormError(null);
-                }}
-              >
-                Discard changes
-              </Button>
-              <Button type="submit" loading={saving} disabled={!dirty}>
-                Save changes
-              </Button>
-            </div>
-          </form>
-        </Card>
+        <div className="space-y-6 lg:col-span-2">
+          <Card>
+            <CardHeader title="Details" />
+            <form onSubmit={onSave} noValidate className="space-y-4 p-5">
+              {formError ? <Alert tone="error">{formError}</Alert> : null}
+              <ContactFields
+                values={values}
+                errors={errors}
+                disabled={saving}
+                onChange={(k, v) => setValues((prev) => (prev ? { ...prev, [k]: v } : prev))}
+              />
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="secondary"
+                  disabled={!dirty || saving}
+                  onClick={() => {
+                    setValues(valuesFromContact(contact));
+                    setErrors({});
+                    setFormError(null);
+                  }}
+                >
+                  Discard changes
+                </Button>
+                <Button type="submit" loading={saving} disabled={!dirty}>
+                  Save changes
+                </Button>
+              </div>
+            </form>
+          </Card>
+          <ContactSequencesCard contactId={contact.id} />
+          <ContactMessagesCard contactId={contact.id} />
+        </div>
 
-        <Card className="h-fit">
-          <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-            <Avatar name={name} />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{name}</p>
-              <p className="truncate text-xs text-slate-600 dark:text-slate-400">{contact.email}</p>
+        <div className="space-y-6">
+          <Card className="h-fit">
+            <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <Avatar name={name} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{name}</p>
+                <p className="truncate text-xs text-slate-600 dark:text-slate-400">
+                  {contact.email}
+                </p>
+              </div>
             </div>
-          </div>
-          <dl className="space-y-4 p-5">
-            <Detail label="Status">
-              <StatusBadge status={contact.status} />
-            </Detail>
-            <Detail label="Consent basis">{titleCase(contact.consentBasis)}</Detail>
-            <Detail label="Company">
-              {contact.company ? (
-                <>
-                  {contact.company.name}
-                  {contact.company.domain ? (
-                    <span className="text-slate-500 dark:text-slate-400">
-                      {" "}
-                      · {contact.company.domain}
-                    </span>
-                  ) : null}
-                </>
-              ) : (
-                "—"
-              )}
-            </Detail>
-            <Detail label="Added">{formatDate(contact.createdAt)}</Detail>
-            <Detail label="Last updated">{formatDate(contact.updatedAt)}</Detail>
-          </dl>
-        </Card>
+            <dl className="space-y-4 p-5">
+              <Detail label="Status">
+                <StatusBadge status={contact.status} />
+              </Detail>
+              <Detail label="Company">
+                {contact.company ? (
+                  <>
+                    {contact.company.name}
+                    {contact.company.domain ? (
+                      <span className="text-slate-500 dark:text-slate-400">
+                        {" "}
+                        · {contact.company.domain}
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  "—"
+                )}
+              </Detail>
+              <Detail label="Added">{formatDate(contact.createdAt)}</Detail>
+              <Detail label="Last updated">{formatDate(contact.updatedAt)}</Detail>
+            </dl>
+          </Card>
+          <ConsentCard
+            contactId={contact.id}
+            onChanged={(basis) =>
+              setData((prev) => (prev ? { ...prev, consentBasis: basis } : prev))
+            }
+          />
+        </div>
       </div>
 
       <DeleteContactDialog

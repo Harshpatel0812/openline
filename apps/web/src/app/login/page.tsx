@@ -11,6 +11,10 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const next = safeNext(params.get("next"));
+  const notice =
+    params.get("reset") === "1"
+      ? "Your password was changed. Sign in with your new password."
+      : null;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +51,7 @@ function LoginForm() {
 
   return (
     <form onSubmit={onSubmit} noValidate className="space-y-4">
+      {notice && !error ? <Alert tone="success">{notice}</Alert> : null}
       {error ? <Alert tone="error">{error}</Alert> : null}
       <Field label="Email">
         {(p) => (
@@ -75,6 +80,14 @@ function LoginForm() {
           />
         )}
       </Field>
+      <div className="-mt-1 text-right">
+        <Link
+          href="/forgot-password"
+          className="text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-400"
+        >
+          Forgot password?
+        </Link>
+      </div>
       <Button type="submit" className="w-full" loading={submitting}>
         Sign in
       </Button>

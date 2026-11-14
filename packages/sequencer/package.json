@@ -1,0 +1,26 @@
+{
+  "name": "@openline/sequencer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The sequence sending engine: claims due enrollments, runs compliance checks, renders and sends.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openline/compliance": "workspace:*",
+    "@openline/db": "workspace:*",
+    "@openline/email": "workspace:*",
+    "@openline/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@openline/config": "workspace:*",
+    "@types/smtp-server": "^3.5.13",
+    "smtp-server": "^3.21.4",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

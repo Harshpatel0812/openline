@@ -2,10 +2,14 @@ import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   and,
   asc,
+  enrollments,
   eq,
+  inArray,
   invites,
   isNull,
+  mailboxes,
   sessions,
+  sql,
   users,
   withIdentity,
   withTenant,
@@ -27,6 +31,8 @@ import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
+import { TransactionalMailService } from "../mail/transactional-mail.service";
+import { REMOVED_SECRET } from "../mailboxes/mailboxes.service";
 import { hashPassword } from "../auth/password";
 import { SessionService } from "../auth/session.service";
 import { hashToken, newToken } from "../auth/tokens";
@@ -41,6 +47,7 @@ export class MembersService {
     @Inject(CONFIG) private readonly config: AppConfig,
     private readonly audit: AuditService,
     private readonly sessions: SessionService,
+    private readonly mail: TransactionalMailService,
   ) {}
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -132,12 +139,51 @@ export class MembersService {
             isNull(invites.revokedAt),
           ),
         );
+      // Their mailboxes in this workspace go with them (same treatment as removing a mailbox):
+      // credentials wiped, and nothing keeps sending from them.
+      const now = new Date();
+      const removedMailboxes = await tx
+        .update(mailboxes)
+        .set({ status: "disconnected", secretSealed: REMOVED_SECRET, updatedAt: now })
+        .where(
+          and(
+            eq(mailboxes.workspaceId, auth.workspaceId),
+            eq(mailboxes.userId, targetUserId),
+            sql`${mailboxes.secretSealed} <> ${REMOVED_SECRET}`,
+          ),
+        )
+        .returning({ id: mailboxes.id });
+      const stopped = removedMailboxes.length
+        ? await tx
+            .update(enrollments)
+            .set({
+              state: "stopped",
+              lastDecision: "mailbox_removed",
+              nextRunAt: null,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(enrollments.workspaceId, auth.workspaceId),
+                inArray(
+                  enrollments.mailboxId,
+                  removedMailboxes.map((m) => m.id),
+                ),
+                inArray(enrollments.state, ["active", "paused"]),
+              ),
+            )
+            .returning({ id: enrollments.id })
+        : [];
       await this.audit.record(tx, {
         workspaceId: auth.workspaceId,
         actorId: auth.userId,
         action: isSelf ? "member.left" : "member.removed",
         entity: "user",
         entityId: targetUserId,
+        metadata: {
+          mailboxesRemoved: removedMailboxes.length,
+          enrollmentsStopped: stopped.length,
+        },
       });
     });
   }
@@ -175,7 +221,7 @@ export class MembersService {
     input: InviteInput,
   ): Promise<{ invite: InviteDto; inviteUrl: string }> {
     const token = newToken();
-    const invite = await this.scope(auth, async (tx) => {
+    const { invite, workspaceName } = await this.scope(auth, async (tx) => {
       const [alreadyMember] = await tx
         .select({ userId: workspaceMembers.userId })
         .from(workspaceMembers)
@@ -222,9 +268,21 @@ export class MembersService {
         entityId: created!.id,
         metadata: { role: input.role },
       });
-      return created!;
+      const [ws] = await tx
+        .select({ name: workspaces.name })
+        .from(workspaces)
+        .where(eq(workspaces.id, auth.workspaceId));
+      return { invite: created!, workspaceName: ws?.name ?? "" };
     });
 
+    const inviteUrl = `${this.config.WEB_URL}/invite/${token}`;
+    await this.mail.sendInvite(
+      invite.email,
+      auth.user.name,
+      workspaceName,
+      inviteUrl,
+      this.config.INVITE_TTL_DAYS,
+    );
     return {
       invite: {
         id: invite.id,
@@ -233,7 +291,7 @@ export class MembersService {
         expiresAt: invite.expiresAt.toISOString(),
         createdAt: invite.createdAt.toISOString(),
       },
-      inviteUrl: `${this.config.WEB_URL}/invite/${token}`,
+      inviteUrl,
     };
   }
 

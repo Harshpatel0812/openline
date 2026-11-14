@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Avatar, Badge, cx, Select, Spinner, useToast } from "@/components/ui";
-import { api, errorMessage } from "@/lib/api";
+import { Avatar, Badge, Button, cx, Select, Spinner, useToast } from "@/components/ui";
+import { api, ApiError, errorMessage } from "@/lib/api";
 import { daysUntil } from "@/lib/format";
 import { Logo } from "./logo";
 import { useMe } from "./me-context";
@@ -20,11 +20,13 @@ const mainNav: NavItem[] = [
   { label: "Today", href: "/app", exact: true },
   { label: "Contacts", href: "/app/contacts" },
   { label: "Companies", href: "/app/companies" },
-  { label: "Sequences", soon: true },
+  { label: "Sequences", href: "/app/sequences" },
   { label: "Pipeline", soon: true },
 ];
 
 const settingsNav: NavItem[] = [
+  { label: "Workspace", href: "/app/settings/workspace" },
+  { label: "Mailboxes", href: "/app/settings/mailboxes" },
   { label: "Team", href: "/app/settings/team" },
   { label: "Suppressions", href: "/app/settings/suppressions" },
 ];
@@ -81,6 +83,79 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
         <NavLinks items={settingsNav} onNavigate={onNavigate} />
       </div>
     </nav>
+  );
+}
+
+const VERIFY_DISMISS_KEY = "ol:verify-banner-dismissed";
+
+/** Shown until the user verifies their email; can be hidden for the rest of the browser session. */
+function VerifyEmailBanner() {
+  const { me } = useMe();
+  const { toast } = useToast();
+  const [dismissed, setDismissed] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    try {
+      setDismissed(sessionStorage.getItem(VERIFY_DISMISS_KEY) === me.user.id);
+    } catch {
+      setDismissed(false);
+    }
+  }, [me.user.id]);
+
+  if (me.user.emailVerified || dismissed) return null;
+
+  async function resend() {
+    setSending(true);
+    try {
+      await api("/auth/resend-verification", { method: "POST" });
+      toast(`We've sent a new verification link to ${me.user.email}.`);
+    } catch (err) {
+      toast(
+        err instanceof ApiError && err.status === 429
+          ? "You've asked for several emails already. Please wait an hour and try again."
+          : errorMessage(err),
+        "error",
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function dismiss() {
+    try {
+      sessionStorage.setItem(VERIFY_DISMISS_KEY, me.user.id);
+    } catch {
+      // Storage may be blocked; hiding for this page view is still fine.
+    }
+    setDismissed(true);
+  }
+
+  return (
+    <div
+      role="region"
+      aria-label="Email verification"
+      className="border-b border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+    >
+      <div className="flex flex-col gap-2 px-4 py-2.5 text-sm sm:flex-row sm:items-center sm:px-6">
+        <p className="flex-1">
+          <span className="font-semibold">Verify your email</span> to connect a mailbox and start
+          sequences. We sent a link to {me.user.email}.
+        </p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" loading={sending} onClick={() => void resend()}>
+            Resend email
+          </Button>
+          <button
+            type="button"
+            onClick={dismiss}
+            className="rounded-md px-2 py-1 text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
+          >
+            Hide for now
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -278,6 +353,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           ) : null}
         </header>
+        <VerifyEmailBanner />
         <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
           {children}
         </main>

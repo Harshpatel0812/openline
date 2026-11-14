@@ -1,8 +1,11 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, Req, Res } from "@nestjs/common";
 import {
+  ForgotPasswordInputSchema,
   LoginInputSchema,
+  ResetPasswordInputSchema,
   SignupInputSchema,
   SwitchWorkspaceInputSchema,
+  VerifyEmailInputSchema,
   type MeResponse,
 } from "@openline/shared";
 import type { Request, Response } from "express";
@@ -14,6 +17,7 @@ import { AuthService, type ClientInfo } from "./auth.service";
 import { SessionService } from "./session.service";
 
 const FIFTEEN_MIN = 15 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
 
 @Controller("auth")
 export class AuthController {
@@ -23,6 +27,10 @@ export class AuthController {
   // Caps guessing on one account even when the attacker rotates IPs.
   private readonly loginPerEmail = new RateLimiter(30, 60 * 60 * 1000);
   private readonly signupPerIp: RateLimiter;
+  private readonly resendPerUser = new RateLimiter(5, HOUR);
+  private readonly forgotPerIp = new RateLimiter(20, HOUR);
+  private readonly forgotPerEmail = new RateLimiter(5, HOUR);
+  private readonly tokenPerIp = new RateLimiter(30, FIFTEEN_MIN);
 
   constructor(
     private readonly auth: AuthService,
@@ -76,6 +84,46 @@ export class AuthController {
     const token = this.sessions.readCookie(req.cookies as Record<string, string> | undefined);
     if (token) await this.sessions.revoke(token);
     this.sessions.clearCookie(res);
+    return { ok: true };
+  }
+
+  @Public()
+  @Post("verify-email")
+  @HttpCode(200)
+  async verifyEmail(@Body() body: unknown, @Req() req: Request): Promise<{ ok: true }> {
+    this.tokenPerIp.consume(clientIp(req));
+    const { token } = parse(VerifyEmailInputSchema, body);
+    await this.auth.verifyEmail(token);
+    return { ok: true };
+  }
+
+  @Post("resend-verification")
+  @HttpCode(200)
+  async resendVerification(@Auth() auth: AuthContext): Promise<{ ok: true }> {
+    this.resendPerUser.consume(auth.userId);
+    await this.auth.resendVerification(auth);
+    return { ok: true };
+  }
+
+  /** Always 200 for any well-formed email (no account enumeration). */
+  @Public()
+  @Post("forgot-password")
+  @HttpCode(200)
+  async forgotPassword(@Body() body: unknown, @Req() req: Request): Promise<{ ok: true }> {
+    this.forgotPerIp.consume(clientIp(req));
+    const { email } = parse(ForgotPasswordInputSchema, body);
+    this.forgotPerEmail.consume(email);
+    await this.auth.forgotPassword(email);
+    return { ok: true };
+  }
+
+  @Public()
+  @Post("reset-password")
+  @HttpCode(200)
+  async resetPassword(@Body() body: unknown, @Req() req: Request): Promise<{ ok: true }> {
+    this.tokenPerIp.consume(clientIp(req));
+    const { token, password } = parse(ResetPasswordInputSchema, body);
+    await this.auth.resetPassword(token, password);
     return { ok: true };
   }
 

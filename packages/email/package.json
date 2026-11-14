@@ -12,7 +12,13 @@
   },
   "devDependencies": {
     "@openline/config": "workspace:*",
+    "@types/nodemailer": "^8.0.2",
     "typescript": "^5.7.2",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "@openline/compliance": "workspace:*",
+    "@openline/shared": "workspace:*",
+    "nodemailer": "^10.5.0"
   }
 }

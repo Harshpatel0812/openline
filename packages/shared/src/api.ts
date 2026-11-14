@@ -47,7 +47,7 @@ export const RoleSchema = z.enum(ROLES);
 export const InvitableRoleSchema = z.enum(["admin", "manager", "rep"]);
 
 export interface MeResponse {
-  user: { id: string; name: string; email: string };
+  user: { id: string; name: string; email: string; emailVerified: boolean };
   workspace: { id: string; name: string; plan: string; trialEndsAt: string };
   role: z.infer<typeof RoleSchema>;
   workspaces: { id: string; name: string; role: z.infer<typeof RoleSchema> }[];

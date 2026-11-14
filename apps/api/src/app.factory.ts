@@ -8,6 +8,7 @@ import { ErrorFilter } from "./common/error.filter";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const CSRF_HEADER = "x-openline-csrf";
+const CSRF_EXEMPT = /^\/v1\/public\/unsubscribe\/[^/]+$/;
 
 /**
  * Security and HTTP setup shared by main.ts and the integration tests, so tests exercise the
@@ -31,12 +32,15 @@ export function configureApp(app: NestExpressApplication): NestExpressApplicatio
     next();
   });
   app.useBodyParser("json", { limit: "6mb" });
+  // Form bodies are only used by RFC 8058 one-click unsubscribe ("List-Unsubscribe=One-Click").
+  // Registering it here also replaces Nest's default 100 KB urlencoded parser.
+  app.useBodyParser("urlencoded", { limit: "10kb", extended: false });
 
   app.enableCors({
     origin: [config.WEB_URL],
     credentials: true,
     allowedHeaders: ["content-type", CSRF_HEADER],
-    methods: ["GET", "POST", "PATCH", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   });
 
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -49,8 +53,14 @@ export function configureApp(app: NestExpressApplication): NestExpressApplicatio
 
   // CSRF: browsers cannot add a custom header to a cross-site request without a CORS
   // preflight, and CORS only allows our web origin. Combined with SameSite=Lax cookies.
+  // Exempt: the public one-click unsubscribe, posted by mail providers (no session, no cookie
+  // used; the signed token in the URL is the only authority).
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (!SAFE_METHODS.has(req.method) && req.headers[CSRF_HEADER] !== "1") {
+    if (
+      !SAFE_METHODS.has(req.method) &&
+      !CSRF_EXEMPT.test(req.path) &&
+      req.headers[CSRF_HEADER] !== "1"
+    ) {
       res.status(403).json({ code: "csrf", message: "Missing CSRF header" });
       return;
     }

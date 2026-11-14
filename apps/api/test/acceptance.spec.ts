@@ -1133,17 +1133,19 @@ describe("acceptance: contacts", () => {
     expect(res.body.email).toBe("kim@initech.com");
   });
 
-  // BUG: a consent basis other than `none` can be set without the date consent was obtained or
-  // a source note. Repro: PATCH /v1/contacts/<id> {"consentBasis":"express"} → 200 and the
-  // contact shows consentBasis "express". PRD OL-E2 (and CASL burden of proof) require a date
-  // and source; the API has no field for either.
-  it.skip("a consent basis other than none requires a date", async () => {
+  // Fixed in Sprint 3: consent needs a source and date, so PATCH refuses it and points to
+  // PUT /v1/contacts/:id/consent (which validates both).
+  it("a consent basis other than none requires a date", async () => {
     const { b } = await signedUp(app);
     const c = await b.post("/v1/contacts", { email: "consent@acme.com" }).expect(201);
     const res = await b
       .patch(`/v1/contacts/${c.body.id as string}`, { consentBasis: "express" })
       .expect(400);
-    expect(res.body.code).toBe("validation_error");
+    expect(res.body.code).toBe("use_consent_endpoint");
+    const noDate = await b
+      .put(`/v1/contacts/${c.body.id as string}/consent`, { basis: "express", source: "Form" })
+      .expect(400);
+    expect(noDate.body.code).toBe("validation_error");
     expect((await b.get(`/v1/contacts/${c.body.id as string}`)).body.consentBasis).toBe("none");
   });
 
@@ -1163,7 +1165,13 @@ describe("acceptance: contacts", () => {
     await rep.patch(`/v1/contacts/${id}`, { title: "Still editable" }).expect(200);
     expect((await owner.get(`/v1/contacts/${id}`).expect(200)).body.consentBasis).toBe("none");
 
-    await manager.patch(`/v1/contacts/${id}`, { consentBasis: "express" }).expect(200);
+    await manager
+      .put(`/v1/contacts/${id}/consent`, {
+        basis: "express",
+        source: "Signed up at a webinar",
+        obtainedAt: "2026-01-15",
+      })
+      .expect(200);
     expect((await owner.get(`/v1/contacts/${id}`).expect(200)).body.consentBasis).toBe("express");
   });
 

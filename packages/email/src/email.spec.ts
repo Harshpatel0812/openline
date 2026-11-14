@@ -12,6 +12,7 @@ describe("buildUnsubscribeHeaders", () => {
 
   it("refuses plain http", () => {
     expect(() => buildUnsubscribeHeaders("http://u.openline.app/x")).toThrow();
+    expect(() => buildUnsubscribeHeaders("http://localhost:3000/x")).not.toThrow();
   });
 });
 

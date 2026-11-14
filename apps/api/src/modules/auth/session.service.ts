@@ -51,7 +51,11 @@ export class SessionService {
     const tokenHash = hashToken(token);
     const row = await withIdentity(this.handle.db, async (tx) => {
       const [found] = await tx
-        .select({ session: sessions, user: { name: users.name, email: users.email } })
+        .select({
+          session: sessions,
+          user: { name: users.name, email: users.email },
+          emailVerifiedAt: users.emailVerifiedAt,
+        })
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
         .where(eq(sessions.tokenHash, tokenHash))
@@ -107,6 +111,7 @@ export class SessionService {
       workspaceId: row.session.workspaceId,
       role: membership.role,
       user: row.user,
+      emailVerified: row.emailVerifiedAt !== null,
     };
   }
 
@@ -114,6 +119,11 @@ export class SessionService {
     await withIdentity(this.handle.db, (tx) =>
       tx.delete(sessions).where(eq(sessions.tokenHash, tokenHash)),
     );
+  }
+
+  /** Ends every session of a user (password reset). Runs in the caller's transaction. */
+  async revokeAllForUser(tx: Tx, userId: string): Promise<void> {
+    await tx.delete(sessions).where(eq(sessions.userId, userId));
   }
 
   async revoke(token: string): Promise<void> {

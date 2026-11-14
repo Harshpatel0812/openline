@@ -20,6 +20,7 @@ import { ApiException, forbidden, notFound } from "../../common/http";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 import { CompaniesService, likePattern } from "../companies/companies.service";
+import { recordConsent } from "./consent.service";
 
 /** True when `tz` is an IANA time zone the runtime knows. */
 export function isValidTimeZone(tz: string): boolean {
@@ -212,19 +213,9 @@ export class ContactsService {
           phone: input.phone ?? null,
           timeZone: input.timeZone ?? null,
           country: input.country ?? null,
-          consentBasis: input.consentBasis ?? "none",
+          consentBasis: "none",
         })
         .returning({ id: contacts.id });
-      if (input.consentBasis && input.consentBasis !== "none") {
-        await this.audit.record(tx, {
-          workspaceId: auth.workspaceId,
-          actorId: auth.userId,
-          action: "contact.consent_changed",
-          entity: "contact",
-          entityId: created!.id,
-          metadata: { from: null, to: input.consentBasis },
-        });
-      }
       return toDto(await this.load(tx, auth, created!.id));
     });
   }
@@ -248,15 +239,12 @@ export class ContactsService {
       if (input.phone !== undefined) patch.phone = input.phone;
       if (input.timeZone !== undefined) patch.timeZone = input.timeZone;
       if (input.country !== undefined) patch.country = input.country;
-      if (input.consentBasis !== undefined && input.consentBasis !== current.consentBasis) {
-        patch.consentBasis = input.consentBasis;
-        await this.audit.record(tx, {
-          workspaceId: auth.workspaceId,
-          actorId: auth.userId,
-          action: "contact.consent_changed",
-          entity: "contact",
-          entityId: id,
-          metadata: { from: current.consentBasis, to: input.consentBasis },
+      if (input.consentBasis === "none" && current.consentBasis !== "none") {
+        // Clearing consent is still a consent record (history kept).
+        await recordConsent(tx, this.audit, auth, current, {
+          basis: "none",
+          source: "Cleared on the contact",
+          obtainedAt: new Date(),
         });
       }
       // Changing the email or company re-links the company (same rule as create).
@@ -337,11 +325,15 @@ export class ContactsService {
 }
 
 /**
- * Consent is legal evidence (Compliance Copilot relies on it): reps can't assert it, and every
- * change is audited.
+ * Consent is legal evidence (Compliance Copilot relies on it): reps can't assert it, and a basis
+ * other than "none" needs a source and date, so it goes through PUT /v1/contacts/:id/consent.
  */
 function assertCanSetConsent(auth: AuthContext, basis: string | undefined): void {
-  if (basis !== undefined && basis !== "none" && auth.role === "rep") {
-    throw forbidden("Only owners, admins and managers can record consent");
-  }
+  if (basis === undefined || basis === "none") return;
+  if (auth.role === "rep") throw forbidden("Only owners, admins and managers can record consent");
+  throw new ApiException(
+    HttpStatus.BAD_REQUEST,
+    "use_consent_endpoint",
+    "Record consent with its source and date on the contact's consent panel.",
+  );
 }

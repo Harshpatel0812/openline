@@ -16,17 +16,17 @@ tests and docs; never holds secrets or production access.
 
 ## Stack
 
-| Layer    | Choice                                                                    |
-| -------- | ------------------------------------------------------------------------- |
-| Language | TypeScript everywhere (`strict`)                                          |
-| Web app  | Next.js 15 (App Router), React 19, Tailwind 4                             |
-| API      | NestJS 11, REST under `/v1`, `/health` unversioned                        |
-| Jobs     | BullMQ on Redis (`apps/worker`)                                           |
-| DB       | PostgreSQL 16 + Drizzle ORM, SQL migrations, RLS per workspace (ADR 0002) |
-| Auth     | First-party email/password + server-side sessions (ADR 0003)              |
-| Tests    | Vitest (unit + integration), Playwright (e2e), k6 (load)                  |
-| Monorepo | pnpm workspaces + Turborepo                                               |
-| Infra    | AWS via Terraform (region not decided yet), GitHub Actions CI/CD          |
+| Layer    | Choice                                                                               |
+| -------- | ------------------------------------------------------------------------------------ |
+| Language | TypeScript everywhere (`strict`)                                                     |
+| Web app  | Next.js 15 (App Router), React 19, Tailwind 4                                        |
+| API      | NestJS 11, REST under `/v1`, `/health` unversioned                                   |
+| Jobs     | Postgres-backed sending engine `packages/sequencer`, run by `apps/worker` (ADR 0004) |
+| DB       | PostgreSQL 16 + Drizzle ORM, SQL migrations, RLS per workspace (ADR 0002)            |
+| Auth     | First-party email/password + server-side sessions (ADR 0003)                         |
+| Tests    | Vitest (unit + integration), Playwright (e2e), k6 (load)                             |
+| Monorepo | pnpm workspaces + Turborepo                                                          |
+| Infra    | AWS via Terraform (region not decided yet), GitHub Actions CI/CD                     |
 
 ## Commands
 
@@ -57,6 +57,7 @@ services/ml         Python models (v2)
 packages/shared     Types, Zod schemas, constants (QUEUES, ROLES, SENDING_DEFAULTS)
 packages/compliance Deterministic rules: send window, consent (CASL), suppression
 packages/email      Mail adapters + RFC 8058 unsubscribe headers + bot-open filter
+packages/sequencer  Sending engine: claim due enrollments, compliance checks, render, send
 packages/ai         Scout guardrails: untrusted-content fencing, approval state machine
 packages/db         SQL migrations (+RLS), Drizzle schema, withTenant(), migrator
 packages/ui         Design system (Sprint 1)
@@ -106,13 +107,14 @@ tests/e2e, tests/load
 
 ## Current status
 
-- **Phase:** 2 — Build the MVP. Sprint 1 (auth, workspaces, roles, invites, RLS) and Sprint 2
-  (contacts, companies, CSV import, suppressions) built together.
+- **Phase:** 2 — Build the MVP. Sprints 1–2 (foundation, contacts) and Sprint 3 (sending engine:
+  mailboxes, sequences, enrollments, compliance checks, unsubscribe, account email) done.
 - **API contract:** `docs/api/README.md`. PRDs: `docs/product/OL-E1-*.md`, `OL-E2-*.md`.
-- **Done:** see `docs/sprints/S1-S2.md` (298 tests, 6 e2e journeys, security review fixed).
-- **Next:** Sprint 3 — sequence engine (Gmail send, scheduler, caps), email delivery for invites,
-  email verification, consent records.
-- **Open decisions:** AWS region / hosting location; company entity; GitHub repo connection.
+- **Done:** `docs/sprints/S1-S2.md`, `docs/sprints/S3.md`.
+- **Next:** Sprint 4 — reply detection (Gmail), reply classification, Scout v1 (research + draft).
+- **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
+  emails real prospects. See `infra/terraform/README.md`.
+- **Open decisions:** AWS region / hosting location; company entity; see S3 "Decisions needed".
 
 ## Key documents
 

@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
@@ -30,7 +31,10 @@ const MIGRATIONS_TABLE =
 export function createDatabase(url: string): DatabaseHandle {
   if (url.startsWith("pglite://")) {
     const location = url.slice("pglite://".length);
-    const client = location === "memory" || location === "" ? new PGlite() : new PGlite(location);
+    const inMemory = location === "memory" || location === "";
+    // PGlite creates only the last folder of the path; on a fresh clone `.data/` doesn't exist yet.
+    if (!inMemory) mkdirSync(location, { recursive: true });
+    const client = inMemory ? new PGlite() : new PGlite(location);
     const db = drizzlePglite(client, { schema }) as unknown as Db;
     return {
       db,

@@ -1,7 +1,7 @@
-# CLAUDE.md — context for AI collaborators
+# AGENTS.md — context for engineers and AI coding assistants
 
-Read this first, every session. It is the memory of the project: Claude does not remember past
-sessions, so everything a new session needs lives here and in `docs/`.
+Read this first, every session. It is the memory of the project: AI assistants do not remember past
+sessions and new engineers start cold, so everything a new session needs lives here and in `docs/`.
 
 ## The product (one paragraph)
 
@@ -11,7 +11,7 @@ keeps promises (Promise Keeper), checks legality before every touch (Compliance 
 spam placement (Inbox Guardian, v2) and flags wishful pipeline stages (Reality Check). Positioning:
 transparent flat pricing, compliance built in, "fewer, better, safer touches".
 
-Owner: **Harsh** (founder, decides and approves). Claude is the build partner: writes specs, code,
+Owner: **Harsh** (founder, decides and approves). The engineering team (people and AI assistants) writes specs, code,
 tests and docs; never holds secrets or production access.
 
 ## Stack
@@ -118,5 +118,5 @@ tests/e2e, tests/load
 
 ## Key documents
 
-- Product plan and Engineering build plan (Claude Docs) — the source of truth for scope.
+- Product plan and Engineering build plan (shared docs) — the source of truth for scope.
 - `docs/adr/` — architecture decisions. `docs/runbooks/` — operations. `docs/onboarding.md`.

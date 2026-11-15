@@ -5,7 +5,7 @@ Date: 2026-11-13 Status: Accepted (replaces the Prisma choice in ADR 0001)
 ## Context
 
 Prisma needs a query-engine binary downloaded at install/generate time. That download is blocked
-in sandboxed environments (including Claude's build workspace), which stopped schema validation and
+in sandboxed environments (including our cloud build workspace), which stopped schema validation and
 any database work. We also want row-level security (RLS) policies, roles and grants under version
 control, which Prisma's schema language cannot express.
 

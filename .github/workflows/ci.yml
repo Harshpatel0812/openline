@@ -137,7 +137,8 @@ jobs:
 
       - name: pnpm dev serves the API and the web app, and sign-up works
         run: |
-          pnpm dev > dev.log 2>&1 &
+          # Stream output live: in CI turbo otherwise holds a task's log until it ends, and dev never ends.
+          pnpm dev --log-order=stream > dev.log 2>&1 &
           for i in $(seq 1 120); do
             if curl -fs http://localhost:4000/health > /dev/null && curl -fs http://localhost:3000/signup > /dev/null; then
               break

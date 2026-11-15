@@ -9,6 +9,8 @@ const securityHeaders = [
 
 const nextConfig = {
   poweredByHeader: false,
+  // `pnpm dev` inside a GitHub Codespace is reached through *.app.github.dev (development only).
+  allowedDevOrigins: ["*.app.github.dev"],
   reactStrictMode: true,
   // Standalone server bundle only for the Docker image (infra/docker/web.Dockerfile sets this).
   output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,

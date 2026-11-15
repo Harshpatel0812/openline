@@ -8,6 +8,7 @@ Base path `/v1` (health is `/health`). JSON only. Types and validation schemas l
 - **Auth:** session cookie (`ol_session` in dev, `__Host-ol_session` in production), httpOnly,
   SameSite=Lax. Every route needs a session unless marked public.
 - **CSRF:** every POST/PATCH/DELETE must send header `x-openline-csrf: 1`, or it gets 403 `csrf`.
+  Exempt (public, no session): `POST /v1/public/unsubscribe/:token` and `POST /v1/public/contact`.
 - **Errors:** always `{ code, message, details? }`. Validation errors: 400 `validation_error` with
   `details: [{ path, message }]`.
 - **Web app access:** the web app calls `/api/v1/...` on its own origin; Next.js rewrites
@@ -85,6 +86,7 @@ Base path `/v1` (health is `/health`). JSON only. Types and validation schemas l
 | `MAIL_TRANSPORT`                     | Openline's own emails: `smtp` \| `log` (print to console) \| `capture` (in memory, tests)                   | `log` in dev, `capture` in test, `smtp` in prod         |
 | `OUTREACH_TRANSPORT`                 | Sequence emails: `real` (each mailbox) \| `sandbox` (everything to `SMTP_URL`) \| `capture`                 | `capture` unless set; `real` in prod                    |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Gmail connection; when unset, Gmail endpoints return 501 `google_not_configured`                            | unset                                                   |
+| `CONTACT_INBOX`                      | Inbox for website contact-form enquiries; required when `APP_ENV` is `staging` or `production`              | `hello@openline.example`                                |
 | `RUN_SCHEDULER`                      | Run the sending engine inside the API process (needed with on-disk PGlite, which only one process can open) | `true` when `DATABASE_URL` is `pglite://`, else `false` |
 
 ## Account emails
@@ -182,6 +184,24 @@ Effects: contact `status = unsubscribed`, suppression added (reason `unsubscribe
 contact's active/paused enrollments become `unsubscribed`, audit `contact.unsubscribed` (no actor).
 Links in emails: footer → `${WEB_URL}/u/<token>` (web page with a confirm button);
 `List-Unsubscribe` header → `<${WEB_URL}/api/v1/public/unsubscribe/<token>>`.
+
+## Public website (OL-E5)
+
+| Method | Path                 | Body               | Response                                                                                             |
+| ------ | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
+| POST   | `/v1/public/contact` | `ContactFormInput` | 202 `{ ok: true }` · 400 `validation_error` · 429 `rate_limited` · 503 `contact_unavailable` (retry) |
+
+- No session, no CSRF header. Schema `ContactFormInputSchema` (`packages/shared/src/contact.ts`):
+  `name` 1–100, `email` valid ≤ 254, `company?` ≤ 120, `teamSize?` one of `1`, `2-5`, `6-15`,
+  `16-25`, `26+`, `message` 10–5000, `website?` (honeypot). Empty optional fields mean "not given".
+- Honeypot: a non-empty `website` returns 202 `{ ok: true }` and nothing is sent (checked before
+  validation, so bots never see field errors).
+- Effect: one plain-text email to `CONTACT_INBOX`, subject `Website enquiry from <name>` (control
+  characters and links removed, ≤ 78 characters), `Reply-To` = the visitor's address. Nothing is
+  stored. Logs carry event names only (`contact.enquiry_sent`, `contact.honeypot_dropped`,
+  `contact.enquiry_failed`), never the name, email or message.
+- Rate limits: 5 per client IP per hour (honeypot hits included; the IP honours `TRUST_PROXY`) and
+  3 per email address per day. In-memory, per API instance, like the other limiters.
 
 ## Sending engine (`packages/sequencer`, built by the lead)
 

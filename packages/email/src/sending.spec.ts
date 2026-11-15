@@ -35,6 +35,12 @@ describe("secret sealing", () => {
     sealed[3] = Buffer.from("y").toString("base64url");
     expect(() => open(sealed.join("."), key, WS)).toThrow();
   });
+
+  it("refuses a truncated authentication tag", () => {
+    const sealed = seal("x", key, WS).split(".");
+    sealed[2] = Buffer.from(sealed[2]!, "base64url").subarray(0, 4).toString("base64url");
+    expect(() => open(sealed.join("."), key, WS)).toThrow(/format/);
+  });
 });
 
 describe("renderEmail", () => {
@@ -159,5 +165,14 @@ describe("GmailAdapter", () => {
     ).toString("utf8");
     expect(mime).toContain("In-Reply-To: <ol.first@acme.com>");
     expect(mime).toContain("References: <ol.first@acme.com>");
+  });
+
+  it("builds MIME with a Reply-To when one is given", async () => {
+    const withReplyTo = await buildRawMime({ ...email, replyTo: "visitor@example.com" });
+    expect(Buffer.from(withReplyTo, "base64url").toString("utf8")).toContain(
+      "Reply-To: visitor@example.com",
+    );
+    const without = await buildRawMime(email);
+    expect(Buffer.from(without, "base64url").toString("utf8")).not.toContain("Reply-To:");
   });
 });

@@ -8,6 +8,8 @@ import { SessionGuard } from "./modules/auth/session.guard";
 import { SessionService } from "./modules/auth/session.service";
 import { CompaniesController } from "./modules/companies/companies.controller";
 import { CompaniesService } from "./modules/companies/companies.service";
+import { ContactController } from "./modules/contact/contact.controller";
+import { ContactService } from "./modules/contact/contact.service";
 import { ComplianceController } from "./modules/compliance/compliance.controller";
 import { ContactsController } from "./modules/contacts/contacts.controller";
 import { ContactsService } from "./modules/contacts/contacts.service";
@@ -59,6 +61,7 @@ import { ScoutSettingsService } from "./modules/workspace/scout-settings.service
     InboxController,
     SequencesController,
     UnsubscribeController,
+    ContactController,
   ],
   providers: [
     AuditService,
@@ -84,6 +87,7 @@ import { ScoutSettingsService } from "./modules/workspace/scout-settings.service
     EnrollmentsService,
     UnsubscribeService,
     SchedulerService,
+    ContactService,
     // Every route requires a session unless marked @Public().
     { provide: APP_GUARD, useClass: SessionGuard },
   ],

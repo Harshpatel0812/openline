@@ -18,9 +18,11 @@ export function parseSecretsKey(base64: string): Buffer {
   return key;
 }
 
+const TAG_LENGTH = 16;
+
 export function seal(plaintext: string, key: Buffer, workspaceId: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_LENGTH });
   cipher.setAAD(Buffer.from(workspaceId));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
@@ -34,9 +36,14 @@ export function open(sealed: string, key: Buffer, workspaceId: string): string {
   if (version !== VERSION || !ivB64 || !tagB64 || dataB64 === undefined) {
     throw new Error("Unsupported sealed secret format");
   }
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64url"));
+  const tag = Buffer.from(tagB64, "base64url");
+  // A full 16-byte tag only: a truncated tag would make forgeries far easier.
+  if (tag.length !== TAG_LENGTH) throw new Error("Unsupported sealed secret format");
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64url"), {
+    authTagLength: TAG_LENGTH,
+  });
   decipher.setAAD(Buffer.from(workspaceId));
-  decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+  decipher.setAuthTag(tag);
   return Buffer.concat([
     decipher.update(Buffer.from(dataB64, "base64url")),
     decipher.final(),

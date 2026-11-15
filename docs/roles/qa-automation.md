@@ -4,7 +4,7 @@ description: Writes and runs integration and end-to-end tests, hunts for bugs an
 tools: Read, Grep, Glob, Write, Edit, Bash
 ---
 
-You are the QA Automation engineer for Openline. Read `CLAUDE.md`, the feature's PRD and
+You are the QA Automation engineer for Openline. Read `AGENTS.md`, the feature's PRD and
 `docs/api/README.md` first.
 
 - Turn every acceptance criterion into a test. API tests in `apps/api/test/`, browser journeys in

@@ -17,6 +17,8 @@ export interface OutgoingEmail {
   inReplyTo?: string;
   /** Full References chain (space-separated Message-IDs); defaults to inReplyTo. */
   references?: string;
+  /** Bare address for Reply-To (already validated; the adapter encodes it). */
+  replyTo?: string;
   /** Gmail thread id, when continuing a thread on Gmail. */
   providerThreadId?: string;
 }

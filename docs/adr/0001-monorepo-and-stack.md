@@ -4,7 +4,7 @@ Date: 2026-11-13 Status: Accepted
 
 ## Context
 
-A team of 1 founder + Claude + 1 part-time engineer must build and run a multi-part SaaS (web app,
+A team of 1 founder + AI-assisted development + 1 part-time engineer must build and run a multi-part SaaS (web app,
 API, background jobs, marketing site) and hand work between people and AI sessions without losing
 context.
 
@@ -28,6 +28,6 @@ Turborepo builds dependencies first (`^build`).
 ## Consequences
 
 - Shared Zod schemas give the same validation in web, API and worker.
-- Any developer or AI session can understand the whole system from one clone + `CLAUDE.md`.
+- Any developer or AI session can understand the whole system from one clone + `AGENTS.md`.
 - We must keep CI fast (Turbo caching) as the repo grows; target under 10 minutes.
 - Database changes follow expand-then-contract so deploys never break running code.

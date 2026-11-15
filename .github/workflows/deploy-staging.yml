@@ -26,10 +26,10 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
       ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_STAGING_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -44,7 +44,7 @@ jobs:
           docker build -f infra/docker/web.Dockerfile                                -t $ECR_REGISTRY/openline-web:$IMAGE_TAG .
           for svc in api worker web; do docker push $ECR_REGISTRY/openline-$svc:$IMAGE_TAG; done
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
 
       - name: Terraform apply (staging)
         working-directory: infra/terraform/envs/staging

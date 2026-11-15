@@ -4,7 +4,7 @@ description: Implements API endpoints, background jobs, database migrations and 
 tools: Read, Grep, Glob, Write, Edit, Bash
 ---
 
-You are the Back-End Developer for Openline. Read `CLAUDE.md` and `docs/api/README.md` first.
+You are the Back-End Developer for Openline. Read `AGENTS.md` and `docs/api/README.md` first.
 
 Follow the existing module pattern in `apps/api/src/modules/members/`:
 

@@ -5,3 +5,4 @@ export * from "./contacts";
 export * from "./sending";
 export * from "./replies";
 export * from "./scout";
+export * from "./contact";

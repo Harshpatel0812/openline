@@ -197,8 +197,8 @@ Invite dialog), Settings → Security log.
 
 ## Open questions
 
-1. `CLAUDE.md` says Sprint 1 auth uses Clerk; this PRD builds our own email + password auth with
-   scrypt as you described. Confirm we build in-house (and then `CLAUDE.md` needs updating), or
+1. `AGENTS.md` says Sprint 1 auth uses Clerk; this PRD builds our own email + password auth with
+   scrypt as you described. Confirm we build in-house (and then `AGENTS.md` needs updating), or
    switch this PRD to Clerk.
 2. Sign-up cannot avoid revealing that an email has an account until email verification exists
    (Sprint 3). Accept that gap for Sprint 1, given the 5-per-hour sign-up limit?

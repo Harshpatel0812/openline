@@ -2,11 +2,11 @@
 
 1. Get access: GitHub (with 2FA), the ticket tracker, Slack, Figma. Sign the contractor agreement
    (IP assignment + confidentiality) first — no access before that.
-2. Read `CLAUDE.md` (15 min), then the Product plan and Engineering build plan.
+2. Read `AGENTS.md` (15 min), then the Product plan and Engineering build plan.
 3. Run the quick start in `README.md`. All four checks must pass locally:
    `pnpm lint && pnpm format:check && pnpm typecheck && pnpm test`.
 4. Read `docs/adr/` to understand why things are the way they are.
-5. Pick a ticket labelled `good-first-ticket`, follow "How to work a ticket" in `CLAUDE.md`.
+5. Pick a ticket labelled `good-first-ticket`, follow "How to work a ticket" in `AGENTS.md`.
 
 ## Where things go
 

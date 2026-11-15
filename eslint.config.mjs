@@ -25,7 +25,7 @@ export default tseslint.config(
       globals: { ...globals.node, ...globals.browser },
     },
     rules: {
-      // `any` needs a comment explaining why (see CLAUDE.md).
+      // `any` needs a comment explaining why (see AGENTS.md).
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "no-console": ["warn", { allow: ["warn", "error"] }],

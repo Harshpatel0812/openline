@@ -243,7 +243,16 @@ export function createReplySync(options: ReplySyncOptions): ReplySync {
       processed += 1;
       try {
         const outcome = await processInbound(
-          { db, workspaceId, mailbox, classifier, now: now() },
+          {
+            db,
+            workspaceId,
+            mailbox,
+            classifier,
+            now: now(),
+            onHumanReplyStored: options.promiseKeeper
+              ? (event) => options.promiseKeeper?.afterInboundStored(event)
+              : undefined,
+          },
           message,
         );
         if (outcome === "stored") summary.stored += 1;

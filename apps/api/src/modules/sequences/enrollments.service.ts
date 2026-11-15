@@ -1,25 +1,27 @@
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
-import { canSendCommercialEmail, isSuppressed, jurisdictionFor } from "@openline/compliance";
+import { failed, type Check, type SendWindow } from "@openline/compliance";
 import {
   and,
-  consents,
   contacts,
   desc,
   enrollments,
   eq,
   inArray,
-  isNull,
   mailboxes,
   messages,
   sql,
-  suppressions,
   withTenant,
   type DatabaseHandle,
   type Tx,
 } from "@openline/db";
 import type {
+  ContactComplianceSummaryDto,
+  ENROLL_SKIP_REASONS,
   EnrollInputSchema,
   EnrollmentDto,
+  EnrollPreviewDto,
+  EnrollPreviewInput,
+  EnrollPreviewItemDto,
   EnrollResultDto,
   ENROLLMENT_STATES,
   MessageDto,
@@ -31,11 +33,21 @@ import { requireVerified } from "../../common/verified";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 import { decodeCursor, encodeCursor } from "../contacts/contacts.service";
+import { evaluateAll, loadEmailFacts, summarise } from "../compliance/compliance.facts";
 import { MailboxesService } from "../mailboxes/mailboxes.service";
 import { SequencesService } from "./sequences.service";
 
 type EnrollInput = z.infer<typeof EnrollInputSchema>;
 type EnrollmentState = (typeof ENROLLMENT_STATES)[number];
+type EnrollSkipReason = (typeof ENROLL_SKIP_REASONS)[number];
+
+/** Skip reasons that come from a compliance rule (they carry the failing check). */
+const COMPLIANCE_SKIPS = new Set<EnrollSkipReason>([
+  "unsubscribed",
+  "bounced",
+  "suppressed",
+  "no_consent",
+]);
 export type EnrollmentAction = "pause" | "resume" | "stop" | "mark_replied";
 
 const createdAtIso = sql<string>`to_char(${enrollments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
@@ -111,6 +123,7 @@ export class EnrollmentsService {
   /**
    * Enrolls contacts, skipping (never failing on) the ones we must not email: suppressed,
    * unsubscribed, bounced, already enrolled, or without the consent their jurisdiction requires.
+   * Compliance skips carry the failing rule from the Compliance Copilot engine.
    */
   enroll(auth: AuthContext, sequenceId: string, input: EnrollInput): Promise<EnrollResultDto> {
     requireVerified(auth);
@@ -136,104 +149,20 @@ export class EnrollmentsService {
       }
 
       const ids = [...new Set(input.contactIds)];
-      const found = await tx
-        .select({
-          id: contacts.id,
-          email: contacts.email,
-          status: contacts.status,
-          country: contacts.country,
-        })
-        .from(contacts)
-        .where(and(eq(contacts.workspaceId, auth.workspaceId), inArray(contacts.id, ids)));
-      const byId = new Map(found.map((c) => [c.id, c]));
-
-      const already = new Set(
-        (
-          await tx
-            .select({ contactId: enrollments.contactId })
-            .from(enrollments)
-            .where(
-              and(
-                eq(enrollments.workspaceId, auth.workspaceId),
-                eq(enrollments.sequenceId, sequenceId),
-                inArray(enrollments.contactId, ids),
-              ),
-            )
-        ).map((r) => r.contactId),
-      );
-
-      // Only the suppression values that could match these contacts (emails and @domains).
-      const candidates = new Set<string>();
-      for (const c of found) {
-        const email = c.email.toLowerCase();
-        candidates.add(email);
-        const at = email.lastIndexOf("@");
-        if (at > 0) candidates.add(email.slice(at));
-      }
-      const suppressed = new Set(
-        candidates.size
-          ? (
-              await tx
-                .select({ value: suppressions.value })
-                .from(suppressions)
-                .where(
-                  and(
-                    eq(suppressions.workspaceId, auth.workspaceId),
-                    inArray(suppressions.value, [...candidates]),
-                  ),
-                )
-            ).map((r) => r.value)
-          : [],
-      );
-
-      // Latest non-withdrawn consent record per contact.
-      const consentRows = found.length
-        ? await tx
-            .select()
-            .from(consents)
-            .where(
-              and(
-                eq(consents.workspaceId, auth.workspaceId),
-                inArray(
-                  consents.contactId,
-                  found.map((c) => c.id),
-                ),
-                isNull(consents.withdrawnAt),
-              ),
-            )
-            .orderBy(desc(consents.createdAt), desc(consents.id))
-        : [];
-      const latestConsent = new Map<string, (typeof consentRows)[number]>();
-      for (const row of consentRows) {
-        if (!latestConsent.has(row.contactId)) latestConsent.set(row.contactId, row);
-      }
-
+      const now = new Date();
+      const assessed = await this.assess(tx, auth.workspaceId, seq, ids, now);
       const skipped: EnrollResultDto["skipped"] = [];
       const eligible: string[] = [];
-      const now = new Date();
-      for (const id of ids) {
-        const c = byId.get(id);
-        if (!c || c.status === "archived") skipped.push({ contactId: id, reason: "not_found" });
-        else if (already.has(id)) skipped.push({ contactId: id, reason: "already_enrolled" });
-        else if (c.status === "unsubscribed")
-          skipped.push({ contactId: id, reason: "unsubscribed" });
-        else if (c.status === "bounced") skipped.push({ contactId: id, reason: "bounced" });
-        else if (isSuppressed(c.email, suppressed))
-          skipped.push({ contactId: id, reason: "suppressed" });
-        else {
-          const jurisdiction = jurisdictionFor(c.country, c.email);
-          const consent = latestConsent.get(id);
-          const permission =
-            jurisdiction === "CA" || jurisdiction === "EU"
-              ? canSendCommercialEmail(
-                  jurisdiction,
-                  consent ? { basis: consent.basis, obtainedAt: consent.obtainedAt } : undefined,
-                  now,
-                )
-              : { allowed: true };
-          if (!permission.allowed) skipped.push({ contactId: id, reason: "no_consent" });
-          else eligible.push(id);
-        }
+      for (const a of assessed) {
+        if (a.skipReason) {
+          skipped.push({
+            contactId: a.contactId,
+            reason: a.skipReason,
+            ...(a.compliance && COMPLIANCE_SKIPS.has(a.skipReason)
+              ? { compliance: a.compliance }
+              : {}),
+          });
+        } else eligible.push(a.contactId);
       }
 
       let enrolled = 0;
@@ -271,6 +200,112 @@ export class EnrollmentsService {
         metadata: { enrolled, skipped: skipped.length, mailboxId: mailbox.id },
       });
       return { enrolled, skipped };
+    });
+  }
+
+  /**
+   * What enrolling these contacts would do, without enrolling anyone: the same skip reasons as
+   * enroll(), plus each contact's compliance decision now and the first check that stops it.
+   */
+  preview(
+    auth: AuthContext,
+    sequenceId: string,
+    input: EnrollPreviewInput,
+  ): Promise<EnrollPreviewDto> {
+    return this.scope(auth, async (tx) => {
+      const seq = await this.sequences.load(tx, auth.workspaceId, sequenceId);
+      const ids = [...new Set(input.contactIds)];
+      const assessed = await this.assess(tx, auth.workspaceId, seq, ids, new Date());
+      const items: EnrollPreviewItemDto[] = assessed.map((a) => ({
+        contactId: a.contactId,
+        enrollable: !a.skipReason,
+        ...(a.skipReason ? { skipReason: a.skipReason } : {}),
+        ...(a.compliance ? { compliance: a.compliance } : {}),
+      }));
+      return {
+        items,
+        counts: {
+          enrollable: items.filter((i) => i.enrollable).length,
+          skipped: items.filter((i) => !i.enrollable).length,
+          blocked: items.filter((i) => i.compliance?.decision === "blocked").length,
+        },
+      };
+    });
+  }
+
+  /**
+   * Per contact: why enrolling would skip them (never changed by the compliance engine: the reasons
+   * and their order are the ones enroll() has always used) and their compliance evaluation now.
+   */
+  private async assess(
+    tx: Tx,
+    workspaceId: string,
+    seq: { id: string; sendWindow: unknown },
+    ids: string[],
+    now: Date,
+  ): Promise<
+    {
+      contactId: string;
+      skipReason?: EnrollSkipReason;
+      compliance?: ContactComplianceSummaryDto;
+    }[]
+  > {
+    const found = ids.length
+      ? await tx
+          .select({
+            id: contacts.id,
+            email: contacts.email,
+            status: contacts.status,
+            country: contacts.country,
+            timeZone: contacts.timeZone,
+          })
+          .from(contacts)
+          .where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, ids)))
+      : [];
+    const byId = new Map(found.map((c) => [c.id, c]));
+
+    const already = new Set(
+      (
+        await tx
+          .select({ contactId: enrollments.contactId })
+          .from(enrollments)
+          .where(
+            and(
+              eq(enrollments.workspaceId, workspaceId),
+              eq(enrollments.sequenceId, seq.id),
+              inArray(enrollments.contactId, ids),
+            ),
+          )
+      ).map((r) => r.contactId),
+    );
+
+    // The same facts (and consent record) as the sending engine and the contact page.
+    const { inputs } = await loadEmailFacts(tx, workspaceId, found, {
+      sendWindow: seq.sendWindow as SendWindow,
+    });
+    const evaluations = evaluateAll(inputs, now);
+
+    return ids.map((id) => {
+      const c = byId.get(id);
+      const evaluation = evaluations.get(id);
+      if (!c || !evaluation || c.status === "archived")
+        return { contactId: id, skipReason: "not_found" };
+      const summary = summarise(evaluation);
+      const because = (check: Check | undefined, reason: EnrollSkipReason) => ({
+        contactId: id,
+        skipReason: reason,
+        compliance: { ...summary, ...(check ? { check: { ...check } } : {}) },
+      });
+      if (already.has(id))
+        return { contactId: id, skipReason: "already_enrolled", compliance: summary };
+      const status = failed(evaluation, "contact_status");
+      if (status && c.status === "unsubscribed") return because(status, "unsubscribed");
+      if (status && c.status === "bounced") return because(status, "bounced");
+      const suppression = failed(evaluation, "suppression");
+      if (suppression) return because(suppression, "suppressed");
+      const consent = failed(evaluation, "consent_ca") ?? failed(evaluation, "basis_eu");
+      if (consent) return because(consent, "no_consent");
+      return { contactId: id, compliance: summary };
     });
   }
 

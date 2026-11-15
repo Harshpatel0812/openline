@@ -65,7 +65,7 @@ Owners and admins can switch Scout off for the whole workspace in the Scout sect
       "Postal address, unsubscribe, Canadian consent and its expiry, GDPR lawful basis, and how Openline enforces them.",
     updated: "2026-11-15",
     body: `
-Openline's compliance checks are written as plain, tested code — not left to an AI — and run immediately before every email. This article explains what they do. It isn't legal advice; for your situation, ask a lawyer.
+Openline's compliance checks are written as plain, tested code — not left to an AI — and run immediately before every email. This article explains what they do; [Compliance Copilot](/help/compliance-copilot) shows how to see every check for a contact. This is not legal advice; for your situation, ask a lawyer.
 
 ## Which rules apply to a contact
 

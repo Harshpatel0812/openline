@@ -1,6 +1,10 @@
 import { createProvider } from "@openline/ai";
 import { createDatabase } from "@openline/db";
-import { createReplySync, createScoutReplyClassifier } from "@openline/replies";
+import {
+  createPromiseKeeper,
+  createReplySync,
+  createScoutReplyClassifier,
+} from "@openline/replies";
 import { createSequencer } from "@openline/sequencer";
 import { loadWorkerConfig } from "./config";
 
@@ -23,6 +27,12 @@ async function main(): Promise<void> {
   });
 
   const provider = createProvider(config.ai);
+  // Promise Keeper: proposals from stored human replies, in the background (rules without a model).
+  const promiseKeeper = createPromiseKeeper({
+    db: handle.db,
+    provider,
+    dailyCapPerMailbox: config.replyClassifyDailyCap,
+  });
   const replySync = createReplySync({
     db: handle.db,
     secretsKey: config.secretsKey,
@@ -35,6 +45,7 @@ async function main(): Promise<void> {
           dailyCapPerMailbox: config.replyClassifyDailyCap,
         })
       : undefined,
+    promiseKeeper,
     allowPrivateHosts: config.allowPrivateSmtpHosts,
     intervalMs: config.replySyncIntervalMs,
   });
@@ -47,6 +58,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     await Promise.all([sequencer.stop(), replySync.stop()]);
+    await promiseKeeper.idle();
     await handle.close();
     process.exit(0);
   };

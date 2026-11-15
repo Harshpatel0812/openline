@@ -83,6 +83,8 @@ export interface ReplySyncOptions {
   secretsKey: Buffer;
   google?: GoogleOAuthConfig;
   classifier?: ReplyClassifier;
+  /** Promise Keeper: told about each stored human reply (runs in the background). */
+  promiseKeeper?: { afterInboundStored(event: { workspaceId: string; messageId: string }): void };
   /** IMAP hosts on private/loopback addresses: development and test only. */
   allowPrivateHosts?: boolean;
   /** How often each mailbox is synced (REPLY_SYNC_INTERVAL_MS). Default 2 minutes. */

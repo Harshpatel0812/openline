@@ -20,6 +20,7 @@ import {
   type DatabaseHandle,
   type Enrollment,
 } from "@openline/db";
+import { RULESET_VERSION } from "@openline/compliance";
 import { CaptureAdapter, SendError, sealJson, type MailAdapter } from "@openline/email";
 import { SMTPServer } from "smtp-server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -622,5 +623,104 @@ describe("replies stop the sequence", () => {
     await runFor(sequencer());
     expect(CaptureAdapter.outbox.filter((m) => m.to === "jane@buyer.com")).toHaveLength(1);
     expect((await enrollment(second.workspaceId, second.enrollment.id)).state).toBe("active");
+  });
+});
+
+describe("compliance proof (OL-E6)", () => {
+  async function outbound(workspaceId: string, enrollmentId: string) {
+    return withTenant(handle.db, { workspaceId }, (tx) =>
+      tx.select().from(messages).where(eq(messages.enrollmentId, enrollmentId)),
+    );
+  }
+
+  it("stores the evaluation that allowed the send on the message, without the body or address", async () => {
+    const { workspaceId, enrollment: e } = await seed({ email: "proof@buyer.com" });
+    await runFor(sequencer());
+    const [m] = await outbound(workspaceId, e.id);
+    expect(m?.status).toBe("sent");
+    const proof = m!.complianceProof!;
+    expect(proof.decision).toBe("allowed");
+    expect(proof.rulesetVersion).toBe(RULESET_VERSION);
+    expect(proof.evaluatedAt).toBe(WED_10AM_NY.toISOString());
+    expect(proof.jurisdiction).toBe("US");
+    expect(proof.checks.map((c) => [c.rule, c.outcome])).toEqual([
+      ["suppression", "pass"],
+      ["contact_status", "pass"],
+      ["consent_ca", "not_applicable"],
+      ["basis_eu", "not_applicable"],
+      ["sender_identity", "pass"],
+      ["unsubscribe_mechanism", "pass"],
+      ["send_window", "pass"],
+    ]);
+    const json = JSON.stringify(proof);
+    expect(json).not.toContain("proof@buyer.com");
+    expect(json).not.toContain("Hi Jane");
+  });
+
+  it("records the CASL check in the proof once consent is on file", async () => {
+    const ok = await seed({ email: "proof@shop.ca", country: "CA", timeZone: "America/Toronto" });
+    await withTenant(handle.db, { workspaceId: ok.workspaceId }, (tx) =>
+      tx.insert(consents).values({
+        workspaceId: ok.workspaceId,
+        contactId: ok.contact.id,
+        basis: "express",
+        source: "Web form",
+        obtainedAt: new Date("2026-10-01T00:00:00Z"),
+      }),
+    );
+    await runFor(sequencer());
+    const [m] = await outbound(ok.workspaceId, ok.enrollment.id);
+    const casl = m!.complianceProof!.checks.find((c) => c.rule === "consent_ca");
+    expect(casl?.outcome).toBe("pass");
+    expect(casl?.citation).toContain("CASL s. 6");
+  });
+
+  it("keeps the no_consent reason text and stores no message when blocked", async () => {
+    const blocked = await seed({ email: "noproof@firma.de", country: "DE", timeZone: "UTC" });
+    await runFor(sequencer());
+    const after = await enrollment(blocked.workspaceId, blocked.enrollment.id);
+    expect(after.state).toBe("stopped");
+    expect(after.lastDecision).toBe("no_consent");
+    expect(after.lastError).toBe(
+      "GDPR: record a lawful basis (consent or legitimate interest) first.",
+    );
+    expect(await outbound(blocked.workspaceId, blocked.enrollment.id)).toEqual([]);
+  });
+
+  it.each([
+    ["unsubscribed", "unsubscribed", "unsubscribed"],
+    ["bounced", "bounced", "bounced"],
+    ["archived", "stopped", "contact_archived"],
+  ] as const)("a %s contact ends as %s (%s)", async (status, state, decision) => {
+    const s = await seed({ email: `${status}-status@buyer.com` });
+    await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.update(contacts).set({ status }).where(eq(contacts.id, s.contact.id)),
+    );
+    await runFor(sequencer());
+    const after = await enrollment(s.workspaceId, s.enrollment.id);
+    expect([after.state, after.lastDecision]).toEqual([state, decision]);
+  });
+
+  it("an unsubscribe-reason suppression ends the enrollment as unsubscribed", async () => {
+    const s = await seed({ email: "optout@buyer.com" });
+    await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx
+        .insert(suppressions)
+        .values({ workspaceId: s.workspaceId, value: "optout@buyer.com", reason: "unsubscribed" }),
+    );
+    await runFor(sequencer());
+    const after = await enrollment(s.workspaceId, s.enrollment.id);
+    expect([after.state, after.lastDecision]).toEqual(["unsubscribed", "suppressed"]);
+  });
+
+  it("an unknown contact time zone is an internal error, retried in 15 minutes", async () => {
+    const s = await seed({ email: "badzone@buyer.com", timeZone: "Mars/Olympus" });
+    await runFor(sequencer());
+    const after = await enrollment(s.workspaceId, s.enrollment.id);
+    expect(after.state).toBe("active");
+    expect(after.lastDecision).toBe("internal_error");
+    expect(after.nextRunAt?.toISOString()).toBe(
+      new Date(WED_10AM_NY.getTime() + 15 * 60_000).toISOString(),
+    );
   });
 });

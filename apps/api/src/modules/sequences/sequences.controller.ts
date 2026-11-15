@@ -12,10 +12,12 @@ import {
 import {
   EnrollInputSchema,
   EnrollmentActionInputSchema,
+  EnrollPreviewInputSchema,
   ENROLLMENT_STATES,
   SequenceInputSchema,
   SequenceStatusInputSchema,
   type EnrollmentDto,
+  type EnrollPreviewDto,
   type EnrollResultDto,
   type MessageDto,
   type SequenceDto,
@@ -97,6 +99,17 @@ export class SequencesController {
     @Body() body: unknown,
   ): Promise<EnrollResultDto> {
     return this.enrollments.enroll(auth, id, parse(EnrollInputSchema, body));
+  }
+
+  /** Compliance and skip reasons per contact before enrolling (nothing is changed). */
+  @Post("sequences/:id/enroll/preview")
+  @HttpCode(200)
+  enrollPreview(
+    @Auth() auth: AuthContext,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ): Promise<EnrollPreviewDto> {
+    return this.enrollments.preview(auth, id, parse(EnrollPreviewInputSchema, body));
   }
 
   @Get("sequences/:id/enrollments")

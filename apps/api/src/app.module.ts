@@ -11,6 +11,8 @@ import { CompaniesService } from "./modules/companies/companies.service";
 import { ContactController } from "./modules/contact/contact.controller";
 import { ContactService } from "./modules/contact/contact.service";
 import { ComplianceController } from "./modules/compliance/compliance.controller";
+import { ContactComplianceController } from "./modules/compliance/contact-compliance.controller";
+import { ContactComplianceService } from "./modules/compliance/contact-compliance.service";
 import { ContactsController } from "./modules/contacts/contacts.controller";
 import { ContactsService } from "./modules/contacts/contacts.service";
 import { ImportService } from "./modules/contacts/import.service";
@@ -42,12 +44,18 @@ import { ScoutController } from "./modules/scout/scout.controller";
 import { ScoutService } from "./modules/scout/scout.service";
 import { ScoutSettingsController } from "./modules/workspace/scout-settings.controller";
 import { ScoutSettingsService } from "./modules/workspace/scout-settings.service";
+import { PromiseKeeperService } from "./modules/promises/promise-keeper.service";
+import { PromisesController } from "./modules/promises/promises.controller";
+import { PromisesService } from "./modules/promises/promises.service";
+import { TasksController } from "./modules/tasks/tasks.controller";
+import { TasksService } from "./modules/tasks/tasks.service";
 
 @Module({
   imports: [DatabaseModule],
   controllers: [
     HealthController,
     ComplianceController,
+    ContactComplianceController,
     AuthController,
     MembersController,
     ContactsController,
@@ -62,8 +70,13 @@ import { ScoutSettingsService } from "./modules/workspace/scout-settings.service
     SequencesController,
     UnsubscribeController,
     ContactController,
+    TasksController,
+    PromisesController,
   ],
   providers: [
+    TasksService,
+    PromisesService,
+    PromiseKeeperService,
     AuditService,
     SessionService,
     AuthService,
@@ -88,6 +101,7 @@ import { ScoutSettingsService } from "./modules/workspace/scout-settings.service
     UnsubscribeService,
     SchedulerService,
     ContactService,
+    ContactComplianceService,
     // Every route requires a session unless marked @Public().
     { provide: APP_GUARD, useClass: SessionGuard },
   ],

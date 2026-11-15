@@ -84,6 +84,14 @@ const groups: {
         title: "Reply in thread",
         body: "Answer from the same mailbox, in the same conversation, without leaving Openline.",
       },
+      {
+        title: "Promise Keeper",
+        body: "Scout spots “I'll send it Friday” and “try me in March” and suggests a follow-up task. Nothing happens until you accept.",
+      },
+      {
+        title: "Tasks",
+        body: "Overdue, due today and the next 7 days on your Today page, with a red count when something slips.",
+      },
     ],
   },
   {
@@ -130,6 +138,10 @@ const groups: {
         title: "Suppression list",
         body: "Emails and whole domains your team must never contact. Opt-out entries can't be removed.",
       },
+      {
+        title: "Compliance Copilot",
+        body: "Ask “can I email them?” on any contact: Allowed, Not right now or Blocked, with every check, its reason and the rule behind it. Openline keeps a record of every check.",
+      },
     ],
   },
   {
@@ -164,8 +176,6 @@ const comingSoon = [
   "HubSpot and Pipedrive sync",
   "Mailbox warm-up",
   "Domain health dashboard",
-  "Promise Keeper — tracks commitments you make in replies",
-  "Compliance Copilot — a plain-English legality check before every touch",
 ];
 
 export default function FeaturesPage() {

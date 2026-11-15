@@ -108,10 +108,11 @@ tests/e2e, tests/load
 ## Current status
 
 - **Phase:** 2 — Build the MVP. Done: Sprints 1–2 (foundation, contacts), Sprint 3 (sending
-  engine), Sprint 4 (reply detection, reply inbox, Scout v1), public website (OL-E5).
+  engine), Sprint 4 (reply detection, reply inbox, Scout v1), public website (OL-E5), Sprint 5 (tasks,
+  Promise Keeper, Compliance Copilot).
 - **API contract:** `docs/api/README.md`. PRDs: `docs/product/`.
-- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`.
-- **Next:** Sprint 5 — Promise Keeper and Compliance Copilot.
+- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`, `S5.md`.
+- **Next:** Sprint 6 — pipeline (deals, stages, board) and Pipeline Reality Check.
 - **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
   emails real prospects. See `infra/terraform/README.md`.
 - **Open decisions:** AWS region / hosting location; company entity; Google verification for

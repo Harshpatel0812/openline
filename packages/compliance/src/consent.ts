@@ -18,6 +18,39 @@ export interface ConsentRecord {
   withdrawnAt?: Date;
 }
 
+/** A stored consent record (a row of the consents table). */
+export interface StoredConsent {
+  id: string;
+  basis: ConsentBasis;
+  obtainedAt: Date;
+  createdAt: Date;
+  withdrawnAt: Date | null;
+}
+
+/**
+ * The consent fact every check uses — the sending engine, enrolling (and its preview), inbox
+ * replies and the contact page: the newest record by creation (then id), withdrawn or not. A
+ * newer withdrawal therefore always wins over an older grant.
+ */
+export function currentConsent(records: readonly StoredConsent[]): ConsentRecord | null {
+  let latest: StoredConsent | null = null;
+  for (const r of records) {
+    if (
+      !latest ||
+      r.createdAt.getTime() > latest.createdAt.getTime() ||
+      (r.createdAt.getTime() === latest.createdAt.getTime() && r.id > latest.id)
+    ) {
+      latest = r;
+    }
+  }
+  if (!latest) return null;
+  return {
+    basis: latest.basis,
+    obtainedAt: latest.obtainedAt,
+    ...(latest.withdrawnAt ? { withdrawnAt: latest.withdrawnAt } : {}),
+  };
+}
+
 function addMonths(date: Date, months: number): Date {
   const result = new Date(date.getTime());
   result.setUTCMonth(result.getUTCMonth() + months);

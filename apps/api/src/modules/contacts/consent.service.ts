@@ -16,7 +16,7 @@ import { notFound } from "../../common/http";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 
-const toDto = (r: typeof consents.$inferSelect): ConsentDto => ({
+export const toDto = (r: typeof consents.$inferSelect): ConsentDto => ({
   basis: r.basis,
   source: r.source,
   obtainedAt: r.obtainedAt.toISOString(),

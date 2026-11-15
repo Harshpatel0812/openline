@@ -1,3 +1,4 @@
+import { rulePromiseCandidates } from "../promises";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../provider";
 
 /** A scripted answer: text, an error to throw, or a function of the request. */
@@ -54,6 +55,15 @@ function lastUserText(request: LlmRequest): string {
 function defaultAnswer(request: LlmRequest): string {
   const props = (request.jsonSchema?.properties ?? {}) as Record<string, unknown>;
   const prompt = lastUserText(request);
+  if ("promises" in props) {
+    // Promise extraction: the rule-based extractor over the fenced email text.
+    const fenced = /<(UNTRUSTED-[0-9a-f]+) source="([^"]*)">\n([\s\S]*)\n<\/\1>/.exec(prompt);
+    const promises = rulePromiseCandidates({
+      text: fenced?.[3] ?? "",
+      direction: fenced?.[2] === "email:outbound" ? "outbound" : "inbound",
+    });
+    return JSON.stringify({ promises });
+  }
   if ("label" in props) {
     const t = prompt.toLowerCase();
     const label = /unsubscribe|remove me|stop emailing/.test(t)

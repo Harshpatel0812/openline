@@ -6,3 +6,5 @@ export * from "./sending";
 export * from "./replies";
 export * from "./scout";
 export * from "./contact";
+export * from "./compliance";
+export * from "./tasks";

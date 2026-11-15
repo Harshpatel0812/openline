@@ -7,6 +7,7 @@ import { gettingStarted } from "./getting-started";
 import { contactsAndMailboxes } from "./contacts-and-mailboxes";
 import { sequencesAndReplies } from "./sequences-and-replies";
 import { scoutComplianceDeliverability } from "./scout-compliance-deliverability";
+import { promisesAndCopilot } from "./promises-and-copilot";
 import type { HelpArticle, HelpCategoryId } from "./types";
 
 export type { HelpArticle, HelpCategoryId };
@@ -40,12 +41,12 @@ export const HELP_CATEGORIES: { id: HelpCategoryId; title: string; description: 
   {
     id: "scout",
     title: "Scout",
-    description: "Drafts with citations, approval, budgets and turning it off.",
+    description: "Drafts with citations, Promise Keeper, approval, budgets and turning it off.",
   },
   {
     id: "compliance",
     title: "Compliance",
-    description: "CAN-SPAM, CASL, GDPR, unsubscribes and the suppression list.",
+    description: "CAN-SPAM, CASL, GDPR, Compliance Copilot, unsubscribes and the suppression list.",
   },
   {
     id: "deliverability",
@@ -59,6 +60,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...contactsAndMailboxes,
   ...sequencesAndReplies,
   ...scoutComplianceDeliverability,
+  ...promisesAndCopilot,
 ];
 
 export function getHelpArticle(slug: string): HelpArticle | undefined {

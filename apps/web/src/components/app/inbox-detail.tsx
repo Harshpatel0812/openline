@@ -35,6 +35,8 @@ import {
 import { decisionLabel, formatDateTime, titleCase } from "@/lib/labels";
 import { scoutErrorMessage, type ScoutProblem } from "@/lib/scout";
 import { useResource } from "@/lib/use-resource";
+import { ComplianceBadge } from "./compliance";
+import { PromisesPanel } from "./promises";
 import { ReplyLabelChip } from "./reply-label";
 import { scoutUnavailableReason } from "./scout-first-touch";
 import { ScoutProblemAlert, ScoutReview } from "./scout-review";
@@ -569,6 +571,17 @@ export function InboxDetail({
 
           <LabelEditor message={m} onSaved={update} />
 
+          <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+            <PromisesPanel
+              // Refetch after a reply: Promise Keeper reads your replies too.
+              key={m.replies.length}
+              card={false}
+              contactId={m.contact?.id}
+              messageIds={[m.id, ...m.replies.map((r) => r.id)]}
+              contactLabel={contactLabel ?? undefined}
+            />
+          </div>
+
           {m.replies.length > 0 ? (
             <section className="space-y-2" aria-labelledby={`${headingId}-sent`}>
               <h3 id={`${headingId}-sent`} className={sectionTitle}>
@@ -608,6 +621,9 @@ export function InboxDetail({
                 requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
+            {m.contact ? (
+              <ComplianceBadge contactId={m.contact.id} name={contactLabel ?? m.from.email} />
+            ) : null}
             <ReplyComposer
               message={m}
               text={composer}

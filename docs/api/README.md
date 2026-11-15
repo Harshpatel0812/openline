@@ -126,19 +126,20 @@ The Google redirect URI is `${WEB_URL}/api/v1/mailboxes/google/callback`; `state
 
 ## Sequences and enrollments
 
-| Method | Path                                             | Who                                        | Response                                                                                                                                                                                    |
-| ------ | ------------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/v1/sequences`                                  | all                                        | `SequenceDto[]` (archived hidden unless `?includeArchived=true`)                                                                                                                            |
-| POST   | `/v1/sequences` `SequenceInput` (steps required) | all                                        | 201 `SequenceDto` (status `draft`)                                                                                                                                                          |
-| GET    | `/v1/sequences/:id`                              | all                                        | `SequenceDto`                                                                                                                                                                               |
-| PATCH  | `/v1/sequences/:id` `SequenceInput`              | all                                        | `SequenceDto` · 409 `sequence_in_use` if replacing steps while it has active/paused enrollments · 403 if a rep replaces the steps of a non-draft sequence · 400 for unknown `{{variables}}` |
-| POST   | `/v1/sequences/:id/status` `{ status }`          | owner, admin, manager                      | `SequenceDto` · 409 `mailing_address_required` · 409 `sequence_empty` (activating with no steps) · 409 `invalid_transition` · 403 `email_not_verified`                                      |
-| POST   | `/v1/sequences/:id/preview` `{ contactId? }`     | all                                        | `{ steps: { position, subject, text, html }[] }`                                                                                                                                            |
-| POST   | `/v1/sequences/:id/enroll` `EnrollInput`         | all (verified)                             | `EnrollResultDto` · 409 `sequence_not_active` · 403 if a rep uses someone else's mailbox · 409 `mailbox_not_active`                                                                         |
-| GET    | `/v1/sequences/:id/enrollments`                  | all                                        | `{ items: EnrollmentDto[], nextCursor }` (`?state=&cursor=&limit=`)                                                                                                                         |
-| POST   | `/v1/enrollments/:id/action` `{ action }`        | all (reps: own mailbox's enrollments only) | `EnrollmentDto` (pause, resume, stop, mark_replied) · 409 `invalid_transition` · 403 if a rep acts on an enrollment sending from someone else's mailbox                                     |
-| GET    | `/v1/contacts/:id/enrollments`                   | all                                        | `EnrollmentDto[]`                                                                                                                                                                           |
-| GET    | `/v1/contacts/:id/messages`                      | all                                        | `MessageDto[]`                                                                                                                                                                              |
+| Method | Path                                                | Who                                        | Response                                                                                                                                                                                    |
+| ------ | --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/v1/sequences`                                     | all                                        | `SequenceDto[]` (archived hidden unless `?includeArchived=true`)                                                                                                                            |
+| POST   | `/v1/sequences` `SequenceInput` (steps required)    | all                                        | 201 `SequenceDto` (status `draft`)                                                                                                                                                          |
+| GET    | `/v1/sequences/:id`                                 | all                                        | `SequenceDto`                                                                                                                                                                               |
+| PATCH  | `/v1/sequences/:id` `SequenceInput`                 | all                                        | `SequenceDto` · 409 `sequence_in_use` if replacing steps while it has active/paused enrollments · 403 if a rep replaces the steps of a non-draft sequence · 400 for unknown `{{variables}}` |
+| POST   | `/v1/sequences/:id/status` `{ status }`             | owner, admin, manager                      | `SequenceDto` · 409 `mailing_address_required` · 409 `sequence_empty` (activating with no steps) · 409 `invalid_transition` · 403 `email_not_verified`                                      |
+| POST   | `/v1/sequences/:id/preview` `{ contactId? }`        | all                                        | `{ steps: { position, subject, text, html }[] }`                                                                                                                                            |
+| POST   | `/v1/sequences/:id/enroll` `EnrollInput`            | all (verified)                             | `EnrollResultDto` · 409 `sequence_not_active` · 403 if a rep uses someone else's mailbox · 409 `mailbox_not_active`                                                                         |
+| POST   | `/v1/sequences/:id/enroll/preview` `{ contactIds }` | all                                        | `EnrollPreviewDto` (OL-E6): per contact `enrollable`, `skipReason?`, `compliance?`; nothing is enrolled                                                                                     |
+| GET    | `/v1/sequences/:id/enrollments`                     | all                                        | `{ items: EnrollmentDto[], nextCursor }` (`?state=&cursor=&limit=`)                                                                                                                         |
+| POST   | `/v1/enrollments/:id/action` `{ action }`           | all (reps: own mailbox's enrollments only) | `EnrollmentDto` (pause, resume, stop, mark_replied) · 409 `invalid_transition` · 403 if a rep acts on an enrollment sending from someone else's mailbox                                     |
+| GET    | `/v1/contacts/:id/enrollments`                      | all                                        | `EnrollmentDto[]`                                                                                                                                                                           |
+| GET    | `/v1/contacts/:id/messages`                         | all                                        | `MessageDto[]`                                                                                                                                                                              |
 
 Sequence status transitions: `draft`/`paused` → `active` (needs ≥1 step, else 409 `sequence_empty`;
 `archived` → `active` is 409 `invalid_transition`); `active` → `paused` (from any other state 409
@@ -307,3 +308,95 @@ the >3 % auto-pause check (4.x.x ignored; address-only reports are not stored); 
 as the link. Unmatched mail is not stored and never reaches a model. The engine also refuses to send
 a step when a human reply arrived after the last step. Audit: `mailbox.reply_detection_on|off`,
 `reply.received`, `reply.relabelled`, `reply.handled`, `reply.sent` (ids, labels, counts only).
+
+# Sprint 5 additions
+
+## Tasks (OL-E6 §1)
+
+Types: `TaskDto`, `TaskCountsDto` and the input schemas in `packages/shared/src/tasks.ts`
+(migration 0009). Reps see and edit their own tasks (others' look like 404); managers and above
+see everyone's and may assign/reassign to a workspace member. Tasks are closed, never deleted;
+deleting the contact deletes its tasks. "Today", "overdue" and "upcoming" (the 7 days after today)
+use the workspace time zone.
+
+| Method + path                 | Who                         | Body / query                                                                                              | Response                                                                     |
+| ----------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `GET /v1/tasks`               | all (`scope=all`: manager+) | `?scope=mine\|all&status=open\|done\|dismissed&due=overdue\|today\|upcoming\|none\|any&contactId=&limit=` | `TaskDto[]` by due date (undated last) · 403 `forbidden` (rep + `scope=all`) |
+| `GET /v1/tasks/counts`        | all                         | —                                                                                                         | `{ overdue, dueToday, upcoming }` (my open tasks)                            |
+| `GET /v1/tasks/:id`           | owner, manager+             | —                                                                                                         | `TaskDto` · 404                                                              |
+| `POST /v1/tasks`              | all                         | `{ title (≤200), notes? (≤2000), dueAt?, kind?, contactId?, companyId?, ownerId? }`                       | 201 `TaskDto` · 403 assigning as a rep · 404 contact/company/member          |
+| `PATCH /v1/tasks/:id`         | owner, manager+             | `{ title?, notes?, dueAt?, kind?, contactId?, ownerId? (manager+), suggestDone?: false }`                 | `TaskDto` · 409 `task_closed`                                                |
+| `POST /v1/tasks/:id/complete` | owner, manager+             | —                                                                                                         | 200 `TaskDto` `done` (repeat = no-op) · 409 `task_closed` if dismissed       |
+| `POST /v1/tasks/:id/dismiss`  | owner, manager+             | —                                                                                                         | 200 `TaskDto` `dismissed` (repeat = no-op) · 409 `task_closed` if done       |
+
+`TaskDto` flags: `overdue` (open, past due), `dueSoon` (open, due within 24 h), `dueDateMissing`
+(the promise named no date), `suggestDoneAt` (the rep replied in the promise's thread afterwards:
+"Looks like you sent it — mark done?"; `PATCH { suggestDone: false }` hides it). Audit:
+`task.created|updated|completed|dismissed` (kind, source, field names; never titles or notes).
+
+## Promise Keeper (OL-E6 §2)
+
+After reply detection stores a human reply (not a bounce, auto-reply, machine mail or unsubscribe)
+and after a rep sends an inbox reply, Promise Keeper runs in the background (never blocks or fails
+the sync or the send) and stores each commitment as a proposed `ai_actions` row of kind `promise_task` (a follow-up task).
+Promise Keeper never proposes pausing enrollments; the `pause_enrollments` kind is a legacy value
+that is never created, listed or accepted.
+Scout's small model when the workspace has Scout on and credits left (≤ 25 % of the month's
+credits, ≤ `REPLY_CLASSIFY_DAILY_CAP` per mailbox per day; spend in `ai_usage` as
+`extract_promises`), else a rule-based extractor. Dates are resolved in code (`resolveWhen` in
+`packages/ai`), never by the model: our promise → end of that business day (17:00; a weekend day
+rolls back to Friday), a week/month/quarter → its first business day 10:00 ("next week" → Monday
+10:00); their request → first business day of the period 10:00; their promise → the business day
+after their period, 10:00; no date → +2 business days, `dueDateMissing`. Weeks are Monday–Sunday,
+numeric dates month/day, quarters calendar quarters; holidays are not modelled.
+
+| Method + path                   | Who                                  | Body / query                                                         | Response                                                                                                                                    |
+| ------------------------------- | ------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/promises`              | mailbox owner (reps), manager+ (all) | `?status=proposed\|accepted\|dismissed&contactId=&messageId=&limit=` | `PromiseProposalDto[]` newest first                                                                                                         |
+| `POST /v1/promises/:id/accept`  | mailbox owner, manager+              | `{ title?, dueAt? }` (edits)                                         | 200 `{ promise, task }` · repeat = same result · 404 · 409 `invalid_transition` (dismissed) · 409 `unsupported_proposal` (legacy pause row) |
+| `POST /v1/promises/:id/dismiss` | mailbox owner, manager+              | `{ reason? }` (≤ 500)                                                | 200 `PromiseProposalDto` `dismissed` · repeat = no-op · 409 `invalid_transition` (accepted)                                                 |
+
+Accept `promise_task` creates the task for the mailbox owner (`source: promise`, the source message,
+`promiseId`). Accepting a legacy `pause_enrollments` row returns 409 `unsupported_proposal` and
+changes nothing (it can still be dismissed). Proposals are not
+reachable through `/v1/scout/actions` (404). Audit: `promise.proposed` (counts),
+`promise.accepted`, `promise.dismissed` (kind, type, edited flags; no email text, no reason).
+Evaluation: `pnpm --filter @openline/ai eval:promises` over `packages/ai/eval/promises.jsonl`.
+
+## Compliance Copilot (OL-E6)
+
+One deterministic engine, `evaluateEmailContact(input, at)` in `packages/compliance`
+(`RULESET_VERSION`), answers "can I email this contact?" for the sending engine, inbox replies, the
+enroll dialog and the contact page. Never an LLM. Each answer is `{ decision, nextAllowedAt?,
+jurisdiction, evaluatedAt, rulesetVersion, checks }`; `decision` is `blocked` if any check fails,
+else `not_now` if any check waits (`nextAllowedAt` = next business-hours start), else `allowed`.
+Each check: `{ rule, outcome: pass|fail|wait|not_applicable, detail, citation, warning? }`.
+
+| Rule (`rule`)           | Fails / waits when                                                                                   |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| `suppression`           | the address or its `@domain` is on the suppression list, or the address is malformed                 |
+| `contact_status`        | unsubscribed, bounced, archived (archived passes for inbox replies); n/a when not a saved contact    |
+| `consent_ca`            | Canada (CASL): no express/implied consent, withdrawn, or implied consent expired (warns within 30 d) |
+| `basis_eu`              | EU/UK (GDPR): no lawful basis recorded, or withdrawn                                                 |
+| `sender_identity`       | the workspace has no postal address                                                                  |
+| `unsubscribe_mechanism` | never (Openline adds it to every email); recorded for proof                                          |
+| `send_window`           | outside the contact's business hours (`wait`); unknown time zone (`fail`); n/a for inbox replies     |
+
+| Method + path                                   | Who                   | Response                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/contacts/:id/compliance?channel=email` | all                   | `ContactComplianceDto`: the evaluation now + `settings` used (time zone and its source, send window, `mailingAddressOnFile`) · `&sequenceId=` uses that sequence's window · `&purpose=reply` (default `send`) evaluates an inbox reply: `send_window` not applicable, archived contacts allowed (400 with `sequenceId`)   |
+| `GET /v1/contacts/:id/compliance/record`        | owner, admin, manager | `ComplianceRecordDto` as a download (`Content-Disposition: attachment`, `Cache-Control: no-store`): contact, consent history, suppression state, audit history for the contact, every outbound email (`id, kind, status, sentAt, subject, proof`), current evaluation. Audits `contact.compliance_exported` (counts only) |
+| `POST /v1/sequences/:id/enroll/preview`         | all                   | see Sequences; `counts: { enrollable, skipped, blocked }`                                                                                                                                                                                                                                                                 |
+
+Errors: 400 `validation_error` (channel other than `email`, bad ids), 404 `not_found` (contact or
+sequence in another workspace), 403 `forbidden` (record export by a rep).
+
+**Proof.** Every outbound email stores the evaluation that allowed it in `messages.compliance_proof`
+(migration 0010; immutable once written; no body, no address): sequence steps (all rules) and inbox
+replies (`send_window` not applicable). Emails sent before 0010 have `proof: null` in the export.
+
+**Same outcomes as before.** The engine maps the checks to the same `lastDecision` codes, in the
+same order: `unsubscribed` / `bounced` / `contact_archived` → `suppressed` → `no_consent` (the
+check's detail in `lastError`) → `mailing_address_missing` (defers 1 h) → mailbox checks →
+`outside_send_window`. Enroll keeps its skip reasons and order; compliance skips (`unsubscribed`,
+`bounced`, `suppressed`, `no_consent`) now carry `compliance: { decision, nextAllowedAt?, check }`.

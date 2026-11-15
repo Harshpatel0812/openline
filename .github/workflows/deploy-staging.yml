@@ -44,7 +44,7 @@ jobs:
           docker build -f infra/docker/web.Dockerfile                                -t $ECR_REGISTRY/openline-web:$IMAGE_TAG .
           for svc in api worker web; do docker push $ECR_REGISTRY/openline-$svc:$IMAGE_TAG; done
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
 
       - name: Terraform apply (staging)
         working-directory: infra/terraform/envs/staging

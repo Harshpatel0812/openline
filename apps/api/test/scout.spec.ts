@@ -441,7 +441,14 @@ describe("Scout config", () => {
   it("defaults to off and allows fake only in development/test", () => {
     expect(loadConfig(base).ai.provider).toBe("off");
     expect(loadConfig({ ...base, AI_PROVIDER: "fake" }).ai.provider).toBe("fake");
-    expect(() => loadConfig({ ...base, APP_ENV: "staging", AI_PROVIDER: "fake" })).toThrow(/fake/);
+    expect(() =>
+      loadConfig({
+        ...base,
+        APP_ENV: "staging",
+        CONTACT_INBOX: "hello@openline.example",
+        AI_PROVIDER: "fake",
+      }),
+    ).toThrow(/fake/);
   });
 
   it("requires credentials, region and model ids for real providers", () => {

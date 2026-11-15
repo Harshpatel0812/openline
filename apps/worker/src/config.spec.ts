@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEV_SECRETS_KEY, loadWorkerConfig } from "./config";
 
-const base = { DATABASE_URL: "postgres://u:p@db:5432/openline" };
+const base = { DATABASE_URL: "postgres://db:5432/openline" };
 
 describe("worker config guardrails", () => {
   it("refuses PGlite (the API runs the engine in-process instead)", () => {

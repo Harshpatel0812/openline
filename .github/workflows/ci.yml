@@ -94,8 +94,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build web app
-        run: pnpm turbo run build --filter=@openline/web...
+      # The journeys start the built API (apps/api/dist) and web app, so build everything.
+      - name: Build
+        run: pnpm build
 
       - name: Install browser
         run: pnpm --filter @openline/e2e exec playwright install --with-deps chromium
@@ -131,6 +132,9 @@ jobs:
         with:
           fetch-depth: 0
       # TODO(OL-E1): pin to a release commit SHA once the repo is live (Dependabot keeps it current).
+      # On pull requests the action diffs the PR; on pushes to main it scans what the push added.
       - uses: trufflesecurity/trufflehog@main
         with:
+          base: ${{ github.event_name == 'push' && github.event.before || '' }}
+          head: ${{ github.event_name == 'push' && github.event.after || '' }}
           extra_args: --results=verified,unknown

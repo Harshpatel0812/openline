@@ -35,6 +35,12 @@ describe("secret sealing", () => {
     sealed[3] = Buffer.from("y").toString("base64url");
     expect(() => open(sealed.join("."), key, WS)).toThrow();
   });
+
+  it("refuses a truncated authentication tag", () => {
+    const sealed = seal("x", key, WS).split(".");
+    sealed[2] = Buffer.from(sealed[2]!, "base64url").subarray(0, 4).toString("base64url");
+    expect(() => open(sealed.join("."), key, WS)).toThrow(/format/);
+  });
 });
 
 describe("renderEmail", () => {

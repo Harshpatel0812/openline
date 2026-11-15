@@ -7,5 +7,6 @@ test("home page loads with security headers", async ({ page }) => {
   const response = await page.goto("/");
   expect(response?.status()).toBe(200);
   expect(response?.headers()["x-frame-options"]).toBe("DENY");
-  await expect(page.getByRole("heading", { name: "Openline", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByRole("banner").getByRole("link", { name: "Openline" })).toBeVisible();
 });

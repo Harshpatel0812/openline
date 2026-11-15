@@ -1,3 +1,4 @@
+import type { ProviderConfig } from "@openline/ai";
 import { parseSecretsKey } from "@openline/email";
 import {
   resolveAppEnv,
@@ -26,6 +27,18 @@ const EnvSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(15_000),
+  /** Sprint 4: how often each mailbox is checked for replies. */
+  REPLY_SYNC_INTERVAL_MS: z.coerce.number().int().min(10_000).default(120_000),
+  /** Model reply classifications per mailbox per UTC day; beyond it the keyword rules decide. */
+  REPLY_CLASSIFY_DAILY_CAP: z.coerce.number().int().min(0).max(100_000).default(200),
+  // Scout's model for reply classification (same variables and rules as the API, ADR 0005).
+  AI_PROVIDER: z.enum(["bedrock", "anthropic", "fake", "off"]).default("off"),
+  AI_MODEL_SMALL: z.string().trim().max(200).optional(),
+  AI_MODEL_LARGE: z.string().trim().max(200).optional(),
+  AI_AWS_REGION: z.string().trim().max(40).optional(),
+  AWS_REGION: z.string().trim().max(40).optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
 });
 
 export interface WorkerConfig {
@@ -38,6 +51,42 @@ export interface WorkerConfig {
   allowPrivateSmtpHosts: boolean;
   google?: { clientId: string; clientSecret: string; redirectUri: string };
   pollIntervalMs: number;
+  replySyncIntervalMs: number;
+  replyClassifyDailyCap: number;
+  /** Scout's model access for reply classification ("off" = keyword fallback only). */
+  ai: ProviderConfig;
+}
+
+/** Same provider rules as the API's resolveAiConfig. */
+function resolveAi(e: z.infer<typeof EnvSchema>, appEnv: AppEnv): ProviderConfig {
+  const devOrTest = appEnv === "development" || appEnv === "test";
+  const provider = e.AI_PROVIDER;
+  if (provider === "fake" && !devOrTest) {
+    throw new Error("AI_PROVIDER=fake is only allowed in development and test");
+  }
+  if (provider === "anthropic" && appEnv === "production") {
+    throw new Error("AI_PROVIDER=anthropic is for development; production uses bedrock");
+  }
+  if (provider === "anthropic" && !e.ANTHROPIC_API_KEY) {
+    throw new Error("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY");
+  }
+  const region = e.AI_AWS_REGION || e.AWS_REGION || undefined;
+  if (provider === "bedrock" && !region) {
+    throw new Error("AI_PROVIDER=bedrock requires AI_AWS_REGION or AWS_REGION");
+  }
+  if (
+    (provider === "bedrock" || provider === "anthropic") &&
+    (!e.AI_MODEL_SMALL || !e.AI_MODEL_LARGE)
+  ) {
+    throw new Error(`AI_PROVIDER=${provider} requires AI_MODEL_SMALL and AI_MODEL_LARGE`);
+  }
+  return {
+    provider,
+    models: { small: e.AI_MODEL_SMALL || "fake-small", large: e.AI_MODEL_LARGE || "fake-large" },
+    region,
+    anthropicApiKey: provider === "anthropic" ? e.ANTHROPIC_API_KEY : undefined,
+    timeoutMs: e.AI_TIMEOUT_MS,
+  };
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
@@ -85,5 +134,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     allowPrivateSmtpHosts,
     google,
     pollIntervalMs: e.POLL_INTERVAL_MS,
+    replySyncIntervalMs: e.REPLY_SYNC_INTERVAL_MS,
+    replyClassifyDailyCap: e.REPLY_CLASSIFY_DAILY_CAP,
+    ai: resolveAi(e, appEnv),
   };
 }

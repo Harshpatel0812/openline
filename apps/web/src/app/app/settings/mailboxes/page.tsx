@@ -11,6 +11,13 @@ import {
 import { PageHeader } from "@/components/app/app-shell";
 import { useMe } from "@/components/app/me-context";
 import {
+  GmailReplyDetectionDialog,
+  ImapDialog,
+  ReplyDetectionStatus,
+  replyDetectionErrorMessage,
+  TurnOffReplyDetectionDialog,
+} from "@/components/app/reply-detection";
+import {
   Alert,
   Badge,
   Button,
@@ -480,14 +487,19 @@ function MailboxesView() {
   const [editing, setEditing] = useState<MailboxDto | null>(null);
   const [removing, setRemoving] = useState<MailboxDto | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [imapFor, setImapFor] = useState<MailboxDto | null>(null);
+  const [gmailReplyFor, setGmailReplyFor] = useState<MailboxDto | null>(null);
+  const [turnOffFor, setTurnOffFor] = useState<MailboxDto | null>(null);
 
-  // ?connected=gmail and ?error=<code> come back from the Google OAuth callback.
+  // ?connected=gmail, ?reply_detection=on and ?error=<code> come back from the Google callback.
   useEffect(() => {
     const connected = params.get("connected");
+    const replyOn = params.get("reply_detection");
     const err = params.get("error");
-    if (!connected && !err) return;
+    if (!connected && !err && !replyOn) return;
     if (connected === "gmail") toast("Gmail mailbox connected");
-    if (err) setCallbackError(mailboxErrorMessage(err));
+    if (replyOn === "on") toast("Reply detection is on. We check for replies every few minutes.");
+    if (err) setCallbackError(replyDetectionErrorMessage(err) ?? mailboxErrorMessage(err));
     router.replace(pathname, { scroll: false });
   }, [params, pathname, router, toast]);
 
@@ -619,6 +631,57 @@ function MailboxesView() {
                         Last error: {m.lastError}
                       </p>
                     ) : null}
+                    <div className="mt-2">
+                      <ReplyDetectionStatus mailbox={m} />
+                      {canManage(m) ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {m.provider === "smtp" ? (
+                            <Button
+                              size="sm"
+                              variant={m.replyDetection === "off" ? "primary" : "secondary"}
+                              onClick={() => setImapFor(m)}
+                              aria-label={`${m.replyDetection === "off" ? "Turn on reply detection" : "Change IMAP settings"} for ${m.email}`}
+                            >
+                              {m.replyDetection === "off"
+                                ? "Turn on reply detection"
+                                : "Change IMAP settings"}
+                            </Button>
+                          ) : m.provider === "gmail" && m.replyDetection !== "on" ? (
+                            m.ownerId === me.user.id ? (
+                              <Button
+                                size="sm"
+                                variant={m.replyDetection === "off" ? "primary" : "secondary"}
+                                onClick={() => setGmailReplyFor(m)}
+                                aria-label={`${m.replyDetection === "off" ? "Turn on" : "Reconnect"} reply detection for ${m.email}`}
+                              >
+                                {m.replyDetection === "off"
+                                  ? "Turn on reply detection"
+                                  : "Reconnect reply detection"}
+                              </Button>
+                            ) : (
+                              <p className="text-xs text-slate-600 dark:text-slate-400">
+                                Only {ownerName(m.ownerId)} can turn this on — Google asks the
+                                mailbox owner.
+                              </p>
+                            )
+                          ) : m.provider === "graph" ? (
+                            <p className="text-xs text-slate-600 dark:text-slate-400">
+                              Not available for Microsoft 365 yet.
+                            </p>
+                          ) : null}
+                          {m.replyDetection !== "off" ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setTurnOffFor(m)}
+                              aria-label={`Turn off reply detection for ${m.email}`}
+                            >
+                              Turn off
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                   <UsageBar sent={m.sentToday} cap={m.dailyCap} />
                   {canManage(m) ? (
@@ -677,6 +740,28 @@ function MailboxesView() {
           setEditing(null);
           setData((prev) => prev?.map((x) => (x.id === m.id ? m : x)));
           toast(`Daily limit set to ${m.dailyCap}`);
+        }}
+      />
+      <ImapDialog
+        mailbox={imapFor}
+        onClose={() => setImapFor(null)}
+        onSaved={(m) => {
+          const wasOff = imapFor?.replyDetection === "off";
+          setImapFor(null);
+          setData((prev) => prev?.map((x) => (x.id === m.id ? m : x)));
+          toast(
+            wasOff ? `Reply detection is on for ${m.email}` : `IMAP settings saved for ${m.email}`,
+          );
+        }}
+      />
+      <GmailReplyDetectionDialog mailbox={gmailReplyFor} onClose={() => setGmailReplyFor(null)} />
+      <TurnOffReplyDetectionDialog
+        mailbox={turnOffFor}
+        onClose={() => setTurnOffFor(null)}
+        onDone={(m) => {
+          setTurnOffFor(null);
+          setData((prev) => prev?.map((x) => (x.id === m.id ? m : x)));
+          toast(`Reply detection is off for ${m.email}`);
         }}
       />
       <RemoveDialog

@@ -70,7 +70,7 @@ export class SmtpAdapter implements MailAdapter {
         messageId: email.messageId,
         replyTo: email.replyTo,
         inReplyTo: email.inReplyTo,
-        references: email.inReplyTo,
+        references: email.references ?? email.inReplyTo,
       });
       return { providerMessageId: String(info.messageId ?? email.messageId) };
     } catch (error) {

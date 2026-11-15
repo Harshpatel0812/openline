@@ -22,6 +22,8 @@ import { SuppressionsService } from "./modules/suppressions/suppressions.service
 import { EmailTokensService } from "./modules/auth/email-tokens.service";
 import { ConsentController } from "./modules/contacts/consent.controller";
 import { ConsentService } from "./modules/contacts/consent.service";
+import { InboxController } from "./modules/inbox/inbox.controller";
+import { InboxService } from "./modules/inbox/inbox.service";
 import { MailboxesController } from "./modules/mailboxes/mailboxes.controller";
 import { MailboxesService } from "./modules/mailboxes/mailboxes.service";
 import { TransactionalMailService } from "./modules/mail/transactional-mail.service";
@@ -33,6 +35,13 @@ import { UnsubscribeController } from "./modules/unsubscribe/unsubscribe.control
 import { UnsubscribeService } from "./modules/unsubscribe/unsubscribe.service";
 import { WorkspaceController } from "./modules/workspace/workspace.controller";
 import { WorkspaceService } from "./modules/workspace/workspace.service";
+import { ScoutBudgetService } from "./modules/scout/budget.service";
+import { ResearchService } from "./modules/scout/research.service";
+import { ScoutModelService } from "./modules/scout/scout-model.service";
+import { ScoutController } from "./modules/scout/scout.controller";
+import { ScoutService } from "./modules/scout/scout.service";
+import { ScoutSettingsController } from "./modules/workspace/scout-settings.controller";
+import { ScoutSettingsService } from "./modules/workspace/scout-settings.service";
 
 @Module({
   imports: [DatabaseModule],
@@ -46,7 +55,10 @@ import { WorkspaceService } from "./modules/workspace/workspace.service";
     SuppressionsController,
     ConsentController,
     WorkspaceController,
+    ScoutSettingsController,
+    ScoutController,
     MailboxesController,
+    InboxController,
     SequencesController,
     UnsubscribeController,
     ContactController,
@@ -64,7 +76,13 @@ import { WorkspaceService } from "./modules/workspace/workspace.service";
     TransactionalMailService,
     ConsentService,
     WorkspaceService,
+    ScoutModelService,
+    ScoutBudgetService,
+    ResearchService,
+    ScoutService,
+    ScoutSettingsService,
     MailboxesService,
+    InboxService,
     SequencesService,
     EnrollmentsService,
     UnsubscribeService,

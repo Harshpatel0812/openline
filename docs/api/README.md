@@ -213,3 +213,97 @@ sequencer.start(15_000); // poll every 15 s; sequencer.stop() on shutdown
 ```
 
 `apps/worker` runs it in production; the API runs it in-process when `RUN_SCHEDULER=true`.
+
+## Scout (Sprint 4)
+
+Scout drafts, the rep decides: every draft is an `ai_actions` row in `proposed`; nothing is sent
+or applied by Scout. Types: `ScoutSettingsDto`, `AiActionDto` and the input schemas in
+`packages/shared/src/scout.ts`. Model access: ADR 0005.
+
+| Method | Path                            | Who                                  | Body                                                                                     | Response                                                                                                   |
+| ------ | ------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| GET    | `/v1/workspace/scout`           | all                                  | —                                                                                        | `ScoutSettingsDto` (settings, `providerConfigured`, `available`, this month's `usage`)                     |
+| PATCH  | `/v1/workspace/scout`           | owner, admin                         | `{ enabled?, monthlyCredits?, webResearch?, aboutUs?, valueProposition? }` (`""` clears) | `ScoutSettingsDto`; audits `workspace.scout_updated` (switches/budget values, text field names only)       |
+| POST   | `/v1/scout/drafts/first-touch`  | all                                  | `{ contactId, purpose, sequenceId?, stepPosition? }`                                     | 201 `AiActionDto` (`draft_email`, subject + body + citations) · 404 contact/sequence                       |
+| POST   | `/v1/scout/drafts/reply`        | all (reps: replies to own mailboxes) | `{ messageId, instructions? }` (an inbound message)                                      | 201 `AiActionDto` (`draft_reply`, body + citations, no template variables) · 404                           |
+| GET    | `/v1/scout/actions/:id`         | creator, manager+                    | —                                                                                        | `AiActionDto` · 404 (other reps' drafts look missing)                                                      |
+| POST   | `/v1/scout/actions/:id/approve` | creator                              | `{ finalText?, finalSubject? }` (edited; omit = as proposed)                             | 200 `AiActionDto` `approved` with `finalText`, `editDistance` · 403 not creator · 409 `invalid_transition` |
+| POST   | `/v1/scout/actions/:id/reject`  | creator                              | `{ reason? }` (≤ 500 chars)                                                              | 200 `AiActionDto` `rejected` · 403 · 409 `invalid_transition`                                              |
+
+Errors on draft endpoints, checked in this order: 503 `ai_unavailable` (`AI_PROVIDER=off` or the
+provider is down after one retry) · 429 `rate_limited` (30 drafts per user per hour,
+`SCOUT_DRAFTS_PER_USER_PER_HOUR`) · 403 `scout_disabled` (turned off for the workspace) · 429
+`ai_budget_exceeded` with `details.resetsAt` (monthly credits used up; 1 credit = 1,000 tokens,
+months are UTC calendar months) · 422 `ai_invalid_output` (the model's answer was invalid twice).
+Tokens spent on a failed draft still count.
+
+**Citations ("cite or stay silent").** `proposal.citations` is `[{ claim, source }]`; `source` is
+an id from `sources`: a contact field (`contact.firstName`, `contact.title`, `contact.company`,
+`contact.country`, `company.domain`), a fetched page URL, or `message.inbound` (their email). A
+citation to anything not in the input is dropped; if the text still makes that claim the answer is
+invalid. First-touch drafts may use `{{firstName}}`-style variables (same list as sequence steps);
+unknown variables make the answer invalid.
+
+**Website research** (`research` in the DTO: `fetched` | `cached` | `failed` | `off` | `none`): up
+to 3 pages of the contact's company domain (`/`, plus `/about`/`/about-us` and
+`/products`/`/services` when the home page links to them), https on port 443 only, private
+addresses refused outside development/test, connection pinned to the checked address (TLS still
+verifies the host name), redirects only within the same domain and its subdomains (max 3, each
+re-checked), 5 s and 1 MB per page, cached 7 days per workspace + domain (failures too). Turned off
+with `webResearch: false`. Page text, contact fields and inbound emails reach the model only
+inside `wrapUntrusted()` fences under `UNTRUSTED_DATA_RULE`.
+
+Audit: `scout.action_proposed`, `scout.action_approved` (`edited`, `editDistance`),
+`scout.action_rejected` (`hasReason`) — ids, counts and flags only, never email text.
+
+`packages/ai` also exports `classifyReply(provider, { text, subject, from })` (small model,
+fenced, zod-validated, retry once → `other`) for the reply pipeline, and `createProvider()`.
+When a provider call throws after an earlier attempt, the `AiError` carries the tokens already
+spent in `details.usage` (they count to the budget). A draft citing any source that wasn't
+provided is invalid (retry once, then 422 `ai_invalid_output`).
+
+## Replies and inbox (Sprint 4)
+
+Configuration (API and worker): `REPLY_SYNC_INTERVAL_MS` (default `120000`, min `10000`) — how
+often each mailbox is checked. Reply sync runs in the API with `RUN_SCHEDULER=true` (PGlite) and in
+`apps/worker` otherwise. With `AI_PROVIDER` set, replies are classified by Scout's small model when
+the workspace has Scout on and credits left (usage recorded in `ai_usage` as `classify_reply`);
+otherwise, and after two invalid model answers, by keyword rules (`labelSource: "rule"`).
+`REPLY_CLASSIFY_DAILY_CAP` (default `200`) caps model classifications per mailbox per UTC day;
+classification may also use at most 50 % of the month's Scout credits. Beyond either cap the
+keyword rules decide. Each sync has one deadline for reading and processing (30 s); it stops at the
+last processed message, keeps the cursor there and is due again at once. Gmail messages over 2 MB
+(`sizeEstimate`) are never downloaded: they are matched by their headers and stored with the body
+"[message too large to show — open it in Gmail]".
+
+`MailboxDto` gains `replyDetection` (`off` | `on` | `error`), `lastSyncedAt`, `lastSyncError`.
+`MessageDto` (contact timeline) gains `direction` (`outbound` | `inbound`).
+
+| Method + path                               | Who                                 | Notes                                                                                                                                                                                     |
+| ------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUT /mailboxes/:id/imap`                   | mailbox owner, owner/admin          | SMTP mailboxes. `{ host, port: 993 \| 143, username?, password? }` (both or neither; neither = SMTP login). Login verified first (SSRF rules as SMTP; 143 requires STARTTLS) → MailboxDto |
+| `DELETE /mailboxes/:id/imap`                | same                                | Reply detection off (SMTP: IMAP settings and login forgotten; Gmail: just off) → MailboxDto                                                                                               |
+| `GET /mailboxes/:id/google/reply-detection` | the mailbox's owner only            | Browser navigation: 302 to Google adding `gmail.readonly` (`include_granted_scopes`). Callback (`/mailboxes/google/callback`) → `?reply_detection=on` or `?error=…`                       |
+| `GET /inbox`                                | rep (own mailboxes), manager+ (all) | `?label=&mailboxId=&needsAction=true\|false&cursor=&limit=` (1–100, default 50). Default = needs action (unhandled interested/referral/not_now/other) → `{ items, nextCursor }`           |
+| `GET /inbox/counts`                         | same                                | `{ needsAction, byLabel }` (unhandled replies)                                                                                                                                            |
+| `GET /inbox/:id`                            | same                                | InboxMessageDto: `text` (plain text — never render as HTML), `original`, `enrollment`, `referral`, `replies`, `openUrl`                                                                   |
+| `PATCH /inbox/:id`                          | same                                | `{ label?, handled? }`. Label → `labelSource: "user"`. To `unsubscribe` applies the suppression; changing it back never removes one                                                       |
+| `POST /inbox/:id/reply`                     | same                                | `{ body }` (1–10,000 chars) → 201 InboxMessageDto. Threaded (`In-Reply-To`, `References`, `Re:`), same mailbox, compliance footer; marks the reply handled                                |
+
+Errors: 409 `reply_detection_unavailable` (provider can't), 400 `imap_auth_failed` /
+`imap_unreachable`, 400 `imap_credentials_required` (the SMTP login is reused only by the
+mailbox's own user, or for an IMAP host on the SMTP host's registrable domain — anyone else must
+send `username` + `password`), 409 `unsubscribed` / `bounced` / `suppressed` / `no_consent` /
+`mailing_address_missing` / `mailbox_unavailable` / `contact_missing` (reply), 409
+`reply_not_allowed` (reply to a bounce report, an auto-submitted message or a mailer-daemon /
+no-reply sender), 502 `send_failed`.
+Another workspace's message, an outbound message, or (for reps) another person's mailbox → 404.
+
+Reply effects (`packages/replies`, idempotent by `(mailbox_id, Message-ID)`): human reply → every
+active/paused enrollment of the contact `replied` (`reply_received`); out-of-office → stays active,
+`nextRunAt` = business day after the return date (else +7 days, never earlier); 5.x.x bounce
+naming a message we sent, for the contact's own address → contact + enrollments `bounced`, then
+the >3 % auto-pause check (4.x.x ignored; address-only reports are not stored); unsubscribe → same
+as the link. Unmatched mail is not stored and never reaches a model. The engine also refuses to send
+a step when a human reply arrived after the last step. Audit: `mailbox.reply_detection_on|off`,
+`reply.received`, `reply.relabelled`, `reply.handled`, `reply.sent` (ids, labels, counts only).

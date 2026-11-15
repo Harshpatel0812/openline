@@ -82,6 +82,8 @@ export default defineConfig({
             OUTREACH_TRANSPORT: "sandbox",
             RUN_SCHEDULER: "true",
             NODE_EXTRA_CA_CERTS: tlsCert,
+            // Scout runs on the deterministic fake model: no network, no API key.
+            AI_PROVIDER: "fake",
           },
           reuseExistingServer: !process.env.CI,
           timeout: 60_000,

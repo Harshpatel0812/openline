@@ -107,14 +107,15 @@ tests/e2e, tests/load
 
 ## Current status
 
-- **Phase:** 2 — Build the MVP. Sprints 1–2 (foundation, contacts) and Sprint 3 (sending engine:
-  mailboxes, sequences, enrollments, compliance checks, unsubscribe, account email) done.
-- **API contract:** `docs/api/README.md`. PRDs: `docs/product/OL-E1-*.md`, `OL-E2-*.md`.
-- **Done:** `docs/sprints/S1-S2.md`, `docs/sprints/S3.md`.
-- **Next:** Sprint 4 — reply detection (Gmail), reply classification, Scout v1 (research + draft).
+- **Phase:** 2 — Build the MVP. Done: Sprints 1–2 (foundation, contacts), Sprint 3 (sending
+  engine), Sprint 4 (reply detection, reply inbox, Scout v1), public website (OL-E5).
+- **API contract:** `docs/api/README.md`. PRDs: `docs/product/`.
+- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`.
+- **Next:** Sprint 5 — Promise Keeper and Compliance Copilot.
 - **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
   emails real prospects. See `infra/terraform/README.md`.
-- **Open decisions:** AWS region / hosting location; company entity; see S3 "Decisions needed".
+- **Open decisions:** AWS region / hosting location; company entity; Google verification for
+  Gmail read access; see the "Decisions needed" section of the latest sprint review.
 
 ## Key documents
 

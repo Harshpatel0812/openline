@@ -19,6 +19,7 @@ import {
 } from "@/components/ui";
 import { api, ApiError, errorMessage, fieldErrorsFrom } from "@/lib/api";
 import { zodFieldErrors } from "@/lib/format";
+import { ScoutFirstTouchDialog } from "./scout-first-touch";
 
 export const MAX_STEPS = 10;
 
@@ -136,7 +137,9 @@ function StepCard({
   onChange,
   onMove,
   onRemove,
+  sequenceId,
 }: {
+  sequenceId?: string;
   step: StepDraft;
   index: number;
   count: number;
@@ -152,6 +155,8 @@ function StepCard({
   const headingId = useId();
   const err = (k: string) => errors[`steps.${index}.${k}`];
   const first = index === 0;
+  const [scoutOpen, setScoutOpen] = useState(false);
+  const { toast } = useToast();
 
   function insertVariable(name: string) {
     const field = lastFocused.current;
@@ -232,6 +237,32 @@ function StepCard({
           </div>
         </div>
         <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-indigo-300 px-3 py-2 dark:border-indigo-800">
+            <p className="text-xs text-slate-700 dark:text-slate-300">
+              Stuck on a blank page? Scout drafts this step for you to review.
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={disabled}
+              onClick={() => setScoutOpen(true)}
+              aria-label={`Draft step ${index + 1} with Scout`}
+            >
+              Draft with Scout
+            </Button>
+          </div>
+          <ScoutFirstTouchDialog
+            open={scoutOpen}
+            onClose={() => setScoutOpen(false)}
+            sequenceId={sequenceId}
+            stepPosition={index + 1}
+            stepHasContent={Boolean(step.subject.trim() || step.body.trim())}
+            onApply={({ subject, body }) => {
+              onChange({ subject: subject || step.subject, body });
+              setScoutOpen(false);
+              toast(`Scout's draft is in step ${index + 1}. Save the sequence to keep it.`);
+            }}
+          />
           {err("delayDays") ? (
             <p className="text-xs font-medium text-red-700 dark:text-red-400">
               Wait: {err("delayDays")}
@@ -596,6 +627,7 @@ export function SequenceEditor({
               onChange={(patch) => updateStep(i, patch)}
               onMove={(dir) => moveStep(i, dir)}
               onRemove={() => setDraft((d) => ({ ...d, steps: d.steps.filter((_, j) => j !== i) }))}
+              sequenceId={sequence?.id}
             />
           ))}
         </ol>

@@ -5,6 +5,7 @@ import { WorkspaceSettingsInputSchema, type WorkspaceSettingsDto } from "@openli
 import { PageHeader } from "@/components/app/app-shell";
 import { useTimeZones } from "@/components/app/contact-form";
 import { useMe } from "@/components/app/me-context";
+import { ScoutSettingsCard } from "@/components/app/scout-settings";
 import {
   Alert,
   Button,
@@ -208,6 +209,9 @@ export default function WorkspaceSettingsPage() {
           ) : null}
         </form>
       </Card>
+      <div className="mt-6">
+        <ScoutSettingsCard canEdit={canEdit} />
+      </div>
     </>
   );
 }

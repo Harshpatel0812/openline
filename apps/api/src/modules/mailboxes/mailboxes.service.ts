@@ -16,14 +16,23 @@ import {
 } from "@openline/db";
 import {
   exchangeGoogleCode,
+  GMAIL_READONLY_SCOPE,
   googleAuthorizeUrl,
+  openJson,
   pinSmtpConfig,
+  sameRegistrableDomain,
   SendError,
   sealJson,
   SmtpAdapter,
   type MailboxSecret,
 } from "@openline/email";
-import type { MailboxDto, MailboxUpdateInputSchema, SmtpMailboxInput } from "@openline/shared";
+import { ReadError, verifyImapLogin, type ImapSettings } from "@openline/replies";
+import type {
+  ImapSettingsInput,
+  MailboxDto,
+  MailboxUpdateInputSchema,
+  SmtpMailboxInput,
+} from "@openline/shared";
 import type { z } from "zod";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
@@ -50,6 +59,25 @@ const googleNotConfigured = () =>
     "Gmail connections are not set up on this server yet",
   );
 
+const replyDetectionUnavailable = () =>
+  new ApiException(
+    HttpStatus.CONFLICT,
+    "reply_detection_unavailable",
+    "Reply detection isn't available for this kind of mailbox",
+  );
+
+/** Checks an IMAP login. Replaceable in tests (see test/replies.spec.ts). */
+export type ImapVerifier = (settings: ImapSettings) => Promise<void>;
+
+/** Sync cursor + error fields reset whenever reply detection is (re)configured. */
+const FRESH_SYNC = {
+  syncUidValidity: null,
+  syncLastUid: null,
+  syncHistoryId: null,
+  lastSyncError: null,
+  syncLockedUntil: null,
+} as const;
+
 function toDto(m: Mailbox, sentToday: number): MailboxDto {
   // Deliberately field by field: secret_sealed and SMTP settings never leave the API.
   return {
@@ -63,16 +91,28 @@ function toDto(m: Mailbox, sentToday: number): MailboxDto {
     lastError: m.lastError,
     ownerId: m.userId,
     createdAt: m.createdAt.toISOString(),
+    replyDetection: m.replyDetection,
+    lastSyncedAt: m.lastSyncedAt?.toISOString() ?? null,
+    lastSyncError: m.lastSyncError,
   };
 }
 
 @Injectable()
 export class MailboxesService {
+  /**
+   * Checks an IMAP login before it is saved. Like SMTP's check, it is skipped with the in-memory
+   * test transport; tests that exercise it replace this.
+   */
+  imapVerifier: ImapVerifier;
+
   constructor(
     @Inject(DB) private readonly handle: DatabaseHandle,
     @Inject(CONFIG) private readonly config: AppConfig,
     private readonly audit: AuditService,
-  ) {}
+  ) {
+    this.imapVerifier =
+      config.OUTREACH_TRANSPORT === "capture" ? async () => undefined : (st) => verifyImapLogin(st);
+  }
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return withTenant(this.handle.db, { workspaceId: auth.workspaceId, userId: auth.userId }, fn);
@@ -241,7 +281,7 @@ export class MailboxesService {
     }
     if (!auth.emailVerified) return fail("email_not_verified");
 
-    let account: { refreshToken: string; email: string };
+    let account: { refreshToken: string; email: string; scopes: string[] };
     try {
       account = await exchangeGoogleCode(this.config.google, query.code);
     } catch {
@@ -250,6 +290,10 @@ export class MailboxesService {
 
     const secret: MailboxSecret = { kind: "oauth", refreshToken: account.refreshToken };
     const sealed = sealJson(secret, this.config.secretsKey, auth.workspaceId);
+    const canRead = account.scopes.includes(GMAIL_READONLY_SCOPE);
+    if (check.state.m) {
+      return this.replyDetectionCallback(auth, check.state.m, account.email, sealed, canRead, page);
+    }
     return this.scope(auth, async (tx) => {
       const existing = await this.findByEmail(tx, auth.workspaceId, account.email);
       if (
@@ -259,6 +303,9 @@ export class MailboxesService {
       ) {
         return fail("mailbox_taken");
       }
+      // A reconnect keeps reply detection on only if Google still grants read access.
+      const keepReading =
+        canRead && existing?.provider === "gmail" && existing.secretSealed !== REMOVED_SECRET;
       const values = {
         userId: auth.userId,
         provider: "gmail" as const,
@@ -266,9 +313,15 @@ export class MailboxesService {
         smtpHost: null,
         smtpPort: null,
         smtpSecure: null,
+        imapHost: null,
+        imapPort: null,
+        imapSecure: null,
         secretSealed: sealed,
         lastError: null,
         updatedAt: new Date(),
+        ...(keepReading && existing.replyDetection !== "off"
+          ? { replyDetection: "on" as const, lastSyncError: null, nextSyncAt: new Date() }
+          : { replyDetection: "off" as const, nextSyncAt: null }),
       };
       let id: string;
       if (existing) {
@@ -331,7 +384,13 @@ export class MailboxesService {
       await this.loadEditable(tx, auth, id);
       await tx
         .update(mailboxes)
-        .set({ status: "disconnected", secretSealed: REMOVED_SECRET, updatedAt: new Date() })
+        .set({
+          status: "disconnected",
+          secretSealed: REMOVED_SECRET,
+          replyDetection: "off",
+          nextSyncAt: null,
+          updatedAt: new Date(),
+        })
         .where(and(eq(mailboxes.id, id), eq(mailboxes.workspaceId, auth.workspaceId)));
       const stopped = await tx
         .update(enrollments)
@@ -360,6 +419,210 @@ export class MailboxesService {
     });
   }
 
+  // ---------------------------------------------------------------- reply detection
+
+  /** Adds or replaces IMAP settings on an SMTP mailbox (login verified first) → reply detection on. */
+  async setImap(auth: AuthContext, id: string, input: ImapSettingsInput): Promise<MailboxDto> {
+    requireVerified(auth);
+    const mailbox = await this.scope(auth, (tx) => this.loadEditable(tx, auth, id));
+    if (mailbox.provider !== "smtp") throw replyDetectionUnavailable();
+    const current = openJson<MailboxSecret>(
+      mailbox.secretSealed,
+      this.config.secretsKey,
+      auth.workspaceId,
+    );
+    if (current.kind !== "smtp") throw replyDetectionUnavailable();
+    const separate =
+      input.username !== undefined && input.password !== undefined
+        ? { username: input.username, password: input.password }
+        : undefined;
+    // The SMTP login is only sent to an IMAP server when the caller owns the mailbox (it's their
+    // own password) or the IMAP host is on the SMTP host's domain. Otherwise an admin could point a
+    // rep's mailbox at a host they control and collect the rep's stored password.
+    if (
+      !separate &&
+      mailbox.userId !== auth.userId &&
+      !(mailbox.smtpHost && sameRegistrableDomain(input.host, mailbox.smtpHost))
+    ) {
+      throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        "imap_credentials_required",
+        "Enter the IMAP username and password: the SMTP login is only reused for an IMAP server on the same domain as the SMTP server.",
+      );
+    }
+    const login = separate ?? { username: current.username, password: current.password };
+
+    try {
+      // Same SSRF rules as SMTP: resolved once, private addresses refused, connected by address.
+      await this.imapVerifier({
+        host: input.host,
+        port: input.port as 993 | 143,
+        ...login,
+        allowPrivate: this.config.allowPrivateSmtpHosts,
+      });
+    } catch (error) {
+      if (error instanceof ReadError && error.kind === "auth") {
+        throw new ApiException(
+          HttpStatus.BAD_REQUEST,
+          "imap_auth_failed",
+          "The IMAP server rejected the username or password. Many providers need an app password.",
+        );
+      }
+      throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        "imap_unreachable",
+        "We couldn't reach that IMAP server. Check the host and port (993 for TLS, 143 for STARTTLS).",
+      );
+    }
+
+    const secret: MailboxSecret = {
+      kind: "smtp",
+      username: current.username,
+      password: current.password,
+      ...(separate ? { imap: separate } : {}),
+    };
+    return this.scope(auth, async (tx) => {
+      await this.loadEditable(tx, auth, id);
+      const [row] = await tx
+        .update(mailboxes)
+        .set({
+          imapHost: input.host.toLowerCase(),
+          imapPort: input.port,
+          imapSecure: input.port === 993,
+          secretSealed: sealJson(secret, this.config.secretsKey, auth.workspaceId),
+          replyDetection: "on",
+          ...FRESH_SYNC,
+          nextSyncAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(mailboxes.id, id), eq(mailboxes.workspaceId, auth.workspaceId)))
+        .returning();
+      await this.audit.record(tx, {
+        workspaceId: auth.workspaceId,
+        actorId: auth.userId,
+        action: "mailbox.reply_detection_on",
+        entity: "mailbox",
+        entityId: id,
+        metadata: { via: "imap", separateLogin: Boolean(separate) },
+      });
+      const sent = await this.sentToday(tx, auth.workspaceId, [id]);
+      return toDto(row!, sent.get(id) ?? 0);
+    });
+  }
+
+  /** Turns reply detection off (SMTP: forgets the IMAP settings and login). */
+  async removeImap(auth: AuthContext, id: string): Promise<MailboxDto> {
+    return this.scope(auth, async (tx) => {
+      const mailbox = await this.loadEditable(tx, auth, id);
+      if (mailbox.provider === "graph") throw replyDetectionUnavailable();
+      const patch: Partial<typeof mailboxes.$inferInsert> = {
+        replyDetection: "off",
+        ...FRESH_SYNC,
+        nextSyncAt: null,
+        updatedAt: new Date(),
+      };
+      if (mailbox.provider === "smtp") {
+        const current = openJson<MailboxSecret>(
+          mailbox.secretSealed,
+          this.config.secretsKey,
+          auth.workspaceId,
+        );
+        if (current.kind === "smtp") {
+          const smtpOnly: MailboxSecret = {
+            kind: "smtp",
+            username: current.username,
+            password: current.password,
+          };
+          patch.secretSealed = sealJson(smtpOnly, this.config.secretsKey, auth.workspaceId);
+        }
+        Object.assign(patch, { imapHost: null, imapPort: null, imapSecure: null });
+      }
+      const [row] = await tx
+        .update(mailboxes)
+        .set(patch)
+        .where(and(eq(mailboxes.id, id), eq(mailboxes.workspaceId, auth.workspaceId)))
+        .returning();
+      await this.audit.record(tx, {
+        workspaceId: auth.workspaceId,
+        actorId: auth.userId,
+        action: "mailbox.reply_detection_off",
+        entity: "mailbox",
+        entityId: id,
+        metadata: { provider: mailbox.provider },
+      });
+      const sent = await this.sentToday(tx, auth.workspaceId, [id]);
+      return toDto(row!, sent.get(id) ?? 0);
+    });
+  }
+
+  /**
+   * Google consent URL adding gmail.readonly to what was granted (incremental consent). Only the
+   * mailbox's owner can grant it: it is their Google account.
+   */
+  async googleReplyDetectionUrl(auth: AuthContext, id: string): Promise<string> {
+    if (!this.config.google) throw googleNotConfigured();
+    requireVerified(auth);
+    const mailbox = await this.scope(auth, (tx) => this.loadEditable(tx, auth, id));
+    if (mailbox.provider !== "gmail") throw replyDetectionUnavailable();
+    if (mailbox.userId !== auth.userId) {
+      throw forbidden("Only the mailbox's owner can give Openline access to read replies");
+    }
+    const state = createOAuthState(
+      { workspaceId: auth.workspaceId, userId: auth.userId, mailboxId: mailbox.id },
+      this.config.UNSUBSCRIBE_SECRET,
+    );
+    return googleAuthorizeUrl(this.config.google, state, mailbox.email, [GMAIL_READONLY_SCOPE]);
+  }
+
+  private async replyDetectionCallback(
+    auth: AuthContext,
+    mailboxId: string,
+    accountEmail: string,
+    sealed: string,
+    canRead: boolean,
+    page: string,
+  ): Promise<string> {
+    const fail = (code: string) => `${page}?error=${encodeURIComponent(code)}`;
+    if (!canRead) return fail("reply_access_denied");
+    return this.scope(auth, async (tx) => {
+      const [mailbox] = await tx
+        .select()
+        .from(mailboxes)
+        .where(
+          and(
+            eq(mailboxes.id, mailboxId),
+            eq(mailboxes.workspaceId, auth.workspaceId),
+            eq(mailboxes.provider, "gmail"),
+            eq(mailboxes.userId, auth.userId),
+            notRemoved,
+          ),
+        )
+        .limit(1);
+      if (!mailbox) return fail("mailbox_not_found");
+      // The consent must come from the mailbox's own Google account.
+      if (mailbox.email !== accountEmail) return fail("wrong_google_account");
+      await tx
+        .update(mailboxes)
+        .set({
+          secretSealed: sealed,
+          replyDetection: "on",
+          ...FRESH_SYNC,
+          nextSyncAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(mailboxes.id, mailbox.id), eq(mailboxes.workspaceId, auth.workspaceId)));
+      await this.audit.record(tx, {
+        workspaceId: auth.workspaceId,
+        actorId: auth.userId,
+        action: "mailbox.reply_detection_on",
+        entity: "mailbox",
+        entityId: mailbox.id,
+        metadata: { via: "gmail" },
+      });
+      return `${page}?reply_detection=on`;
+    });
+  }
+
   // ---------------------------------------------------------------- helpers
 
   /** A visible (not removed) mailbox in this workspace, or 404. */
@@ -374,7 +637,7 @@ export class MailboxesService {
   }
 
   /** The mailbox's owner, workspace owners and admins may change it. */
-  private async loadEditable(tx: Tx, auth: AuthContext, id: string): Promise<Mailbox> {
+  async loadEditable(tx: Tx, auth: AuthContext, id: string): Promise<Mailbox> {
     const mailbox = await this.load(tx, auth.workspaceId, id);
     if (mailbox.userId !== auth.userId && auth.role !== "owner" && auth.role !== "admin") {
       throw forbidden("Only the mailbox's owner or an admin can change it");

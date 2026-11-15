@@ -5,6 +5,8 @@ export interface OAuthState {
   w: string;
   u: string;
   exp: number;
+  /** Set for "turn on reply detection" (incremental consent): the mailbox it is for. */
+  m?: string;
 }
 
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -19,12 +21,17 @@ function sign(payload: string, secret: string): Buffer {
 }
 
 export function createOAuthState(
-  claims: { workspaceId: string; userId: string },
+  claims: { workspaceId: string; userId: string; mailboxId?: string },
   secret: string,
   now = Date.now(),
 ): string {
   const payload = Buffer.from(
-    JSON.stringify({ w: claims.workspaceId, u: claims.userId, exp: now + OAUTH_STATE_TTL_MS }),
+    JSON.stringify({
+      w: claims.workspaceId,
+      u: claims.userId,
+      exp: now + OAUTH_STATE_TTL_MS,
+      ...(claims.mailboxId ? { m: claims.mailboxId } : {}),
+    }),
   ).toString("base64url");
   return `${payload}.${sign(payload, secret).toString("base64url")}`;
 }
@@ -41,7 +48,12 @@ export function verifyOAuthState(token: string, secret: string, now = Date.now()
   }
   try {
     const state = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as OAuthState;
-    if (typeof state.w !== "string" || typeof state.u !== "string" || typeof state.exp !== "number")
+    if (
+      typeof state.w !== "string" ||
+      typeof state.u !== "string" ||
+      typeof state.exp !== "number" ||
+      (state.m !== undefined && typeof state.m !== "string")
+    )
       return { ok: false, error: "state_invalid" };
     if (state.exp <= now) return { ok: false, error: "state_expired" };
     return { ok: true, state };

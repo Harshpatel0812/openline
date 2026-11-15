@@ -429,6 +429,31 @@ describe("sending engine", () => {
     expect(after.lastDecision).toBe("sent");
   });
 
+  it("an out-of-office recorded during an in-flight send keeps its later resume date (M1)", async () => {
+    const email = "ooo-mid-send@buyer.com";
+    const { workspaceId, enrollment: e } = await seed({ email });
+    const resume = new Date("2026-12-08T12:00:00Z");
+    await runFor(
+      sequencer({
+        adapterFor: () =>
+          adapterWith(email, () =>
+            // What reply detection does when the auto-reply lands while step 1 is being sent.
+            withTenant(handle.db, { workspaceId }, async (tx) => {
+              await tx
+                .update(enrollments)
+                .set({ nextRunAt: resume, lastDecision: "out_of_office" })
+                .where(eq(enrollments.id, e.id));
+            }),
+          ),
+      }),
+    );
+    const after = await enrollment(workspaceId, e.id);
+    expect(after.nextPosition).toBe(2);
+    expect(after.state).toBe("active");
+    expect(after.lastDecision).toBe("out_of_office");
+    expect(after.nextRunAt?.toISOString()).toBe(resume.toISOString());
+  });
+
   it("never re-sends a step whose sender died mid-send; flags it for a person instead", async () => {
     const email = "unconfirmed@buyer.com";
     const { workspaceId, enrollment: e, contact, mailbox } = await seed({ email });
@@ -530,5 +555,72 @@ describe("real SMTP delivery (sandbox transport)", () => {
     expect(raw).toMatch(/^List-Unsubscribe-Post: List-Unsubscribe=One-Click/m);
     expect(raw).toMatch(/^Message-ID: <ol\.[0-9a-f]+@acme\.com>/m);
     expect(raw).toContain("Jersey City");
+  });
+});
+
+describe("replies stop the sequence", () => {
+  async function inbound(
+    workspaceId: string,
+    e: Enrollment,
+    receivedAt: Date,
+    label: "interested" | "out_of_office",
+  ) {
+    await withTenant(handle.db, { workspaceId }, (tx) =>
+      tx.insert(messages).values({
+        workspaceId,
+        enrollmentId: e.id,
+        contactId: e.contactId,
+        mailboxId: e.mailboxId,
+        direction: "inbound",
+        status: "received",
+        messageIdHeader: `<${randomUUID()}@buyer.com>`,
+        subject: "Re: Quick question",
+        fromEmail: "jane@buyer.com",
+        receivedAt,
+        sentAt: receivedAt,
+        label,
+        labelSource: "rule",
+      }),
+    );
+  }
+
+  it("ends the enrollment as replied instead of sending when a reply came after the last step", async () => {
+    const { workspaceId, enrollment: e } = await seed();
+    const s = sequencer();
+    await runFor(s); // step 1
+    expect(CaptureAdapter.outbox).toHaveLength(1);
+    // Step 2 is due, but Jane answered after step 1 (reply sync hasn't moved the enrollment yet).
+    await withTenant(handle.db, { workspaceId }, (tx) =>
+      tx
+        .update(enrollments)
+        .set({ nextRunAt: new Date(Date.now() - 60_000) })
+        .where(eq(enrollments.id, e.id)),
+    );
+    await inbound(workspaceId, e, new Date(WED_10AM_NY.getTime() + 1000), "interested");
+    await runFor(s);
+    expect(CaptureAdapter.outbox).toHaveLength(1);
+    const after = await enrollment(workspaceId, e.id);
+    expect(after.state).toBe("replied");
+    expect(after.lastDecision).toBe("reply_received");
+  });
+
+  it("an out-of-office or a reply older than the last step does not stop it", async () => {
+    const { workspaceId, enrollment: e } = await seed();
+    await inbound(workspaceId, e, new Date(WED_10AM_NY.getTime() - 60 * 60_000), "interested");
+    await inbound(workspaceId, e, new Date(WED_10AM_NY.getTime() - 1000), "out_of_office");
+    // No step sent yet: any earlier human reply counts, so this one ends it.
+    await runFor(sequencer());
+    expect((await enrollment(workspaceId, e.id)).state).toBe("replied");
+
+    const second = await seed();
+    await inbound(
+      second.workspaceId,
+      second.enrollment,
+      new Date(WED_10AM_NY.getTime() - 1000),
+      "out_of_office",
+    );
+    await runFor(sequencer());
+    expect(CaptureAdapter.outbox.filter((m) => m.to === "jane@buyer.com")).toHaveLength(1);
+    expect((await enrollment(second.workspaceId, second.enrollment.id)).state).toBe("active");
   });
 });

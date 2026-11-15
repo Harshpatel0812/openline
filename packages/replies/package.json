@@ -1,0 +1,31 @@
+{
+  "name": "@openline/replies",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reply detection: reads mailboxes (IMAP, Gmail), matches replies to outreach, classifies them and applies their effects.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openline/ai": "workspace:*",
+    "@openline/compliance": "workspace:*",
+    "@openline/db": "workspace:*",
+    "@openline/email": "workspace:*",
+    "@openline/sequencer": "workspace:*",
+    "@openline/shared": "workspace:*",
+    "html-to-text": "^10.0.1",
+    "imapflow": "^2.11.0",
+    "mailparser": "^3.14.3"
+  },
+  "devDependencies": {
+    "@openline/config": "workspace:*",
+    "@types/html-to-text": "^9.0.4",
+    "@types/mailparser": "^3.9.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

@@ -7,11 +7,13 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
 } from "@nestjs/common";
 import {
+  ImapSettingsInputSchema,
   MailboxUpdateInputSchema,
   SmtpMailboxInputSchema,
   type MailboxDto,
@@ -64,6 +66,35 @@ export class MailboxesController {
       parsed.success ? parsed.data : { error: "invalid_request" },
     );
     res.redirect(302, location);
+  }
+
+  /** Sprint 4: IMAP settings for reply detection on an SMTP mailbox (login verified first). */
+  @Put(":id/imap")
+  setImap(
+    @Auth() auth: AuthContext,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ): Promise<MailboxDto> {
+    return this.mailboxes.setImap(auth, id, parse(ImapSettingsInputSchema, body));
+  }
+
+  /** Turns reply detection off. */
+  @Delete(":id/imap")
+  removeImap(
+    @Auth() auth: AuthContext,
+    @Param("id", ParseUUIDPipe) id: string,
+  ): Promise<MailboxDto> {
+    return this.mailboxes.removeImap(auth, id);
+  }
+
+  /** Browser navigation: 302 to Google's consent screen, adding gmail.readonly. */
+  @Get(":id/google/reply-detection")
+  async googleReplyDetection(
+    @Auth() auth: AuthContext,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.redirect(302, await this.mailboxes.googleReplyDetectionUrl(auth, id));
   }
 
   @Patch(":id")

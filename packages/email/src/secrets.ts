@@ -58,6 +58,16 @@ export function openJson<T>(sealed: string, key: Buffer, workspaceId: string): T
   return JSON.parse(open(sealed, key, workspaceId)) as T;
 }
 
-/** Credentials stored sealed for each mailbox provider. */
+/** IMAP login for reply detection on an SMTP mailbox (often the same as the SMTP login). */
+export interface ImapSecret {
+  username: string;
+  password: string;
+}
+
+/**
+ * Credentials stored sealed for each mailbox provider. `imap` was added in Sprint 4: secrets sealed
+ * before then don't have it, so always treat it as optional.
+ */
 export type MailboxSecret =
-  { kind: "smtp"; username: string; password: string } | { kind: "oauth"; refreshToken: string };
+  | { kind: "smtp"; username: string; password: string; imap?: ImapSecret }
+  | { kind: "oauth"; refreshToken: string };

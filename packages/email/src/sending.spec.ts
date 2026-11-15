@@ -166,4 +166,13 @@ describe("GmailAdapter", () => {
     expect(mime).toContain("In-Reply-To: <ol.first@acme.com>");
     expect(mime).toContain("References: <ol.first@acme.com>");
   });
+
+  it("builds MIME with a Reply-To when one is given", async () => {
+    const withReplyTo = await buildRawMime({ ...email, replyTo: "visitor@example.com" });
+    expect(Buffer.from(withReplyTo, "base64url").toString("utf8")).toContain(
+      "Reply-To: visitor@example.com",
+    );
+    const without = await buildRawMime(email);
+    expect(Buffer.from(without, "base64url").toString("utf8")).not.toContain("Reply-To:");
+  });
 });

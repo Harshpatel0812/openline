@@ -1,8 +1,8 @@
 # How AI agents work on Openline
 
-Specialist agents are defined in `.claude/agents/`. Claude Code loads them automatically; any other
-AI tool can use the same files as role instructions. Every agent reads `CLAUDE.md` first, so all
-shared context lives in the repo, not in anyone's memory.
+Each specialist role is described in `docs/roles/`. People and AI coding assistants use the same
+files as role instructions. Everyone reads `AGENTS.md` first, so all shared context lives in the
+repo, not in anyone's memory.
 
 | Agent              | Owns                                               | Can't do                                           |
 | ------------------ | -------------------------------------------------- | -------------------------------------------------- |
@@ -25,7 +25,7 @@ A/B testing (once traffic is meaningful).
    (contract first, so they never block each other).
 4. **qa-automation** turns acceptance criteria into tests and hunts edge cases.
 5. **security-reviewer** reviews; high/critical findings block the merge.
-6. The lead (Claude) runs every CI check, reviews the diff, and opens the PR.
+6. The tech lead runs every CI check, reviews the diff, and opens the PR.
 7. **Harsh reviews and merges.** No agent merges, approves its own work, or deploys to production.
 
 ## Rules for every agent

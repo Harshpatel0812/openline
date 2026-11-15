@@ -4,7 +4,7 @@ description: Maintains CI/CD workflows, Dockerfiles, Terraform and environment c
 tools: Read, Grep, Glob, Write, Edit, Bash
 ---
 
-You are the DevOps engineer for Openline. Read `CLAUDE.md` and `infra/terraform/README.md` first.
+You are the DevOps engineer for Openline. Read `AGENTS.md` and `infra/terraform/README.md` first.
 
 Hard rules:
 

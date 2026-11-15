@@ -112,6 +112,51 @@ jobs:
           path: tests/e2e/playwright-report
           retention-days: 7
 
+  windows-dev:
+    # Most of us develop on Windows: prove that the README steps work there.
+    name: Local dev on Windows (pnpm dev)
+    needs: quality
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: pnpm dev serves the API and the web app, and sign-up works
+        run: |
+          pnpm dev > dev.log 2>&1 &
+          for i in $(seq 1 120); do
+            if curl -fs http://localhost:4000/health > /dev/null && curl -fs http://localhost:3000/signup > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:4000/health
+          curl -fsS -o /dev/null http://localhost:3000/signup
+          curl -fsS -o /dev/null -w "sign-up: %{http_code}\n" \
+            -H "content-type: application/json" -H "x-openline-csrf: 1" \
+            -d '{"name":"CI","email":"ci@example.com","password":"correct horse battery staple","workspaceName":"CI"}' \
+            http://localhost:3000/api/v1/auth/signup
+          sleep 2
+          grep -q "verify-email?token=" dev.log
+
+      - name: Show the dev log
+        if: always()
+        run: cat dev.log || true
+
   sast:
     name: Static security analysis (Semgrep)
     runs-on: ubuntu-latest

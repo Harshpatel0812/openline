@@ -18,5 +18,5 @@ describe("createDatabase (on-disk PGlite for local development)", () => {
     } finally {
       await handle.close();
     }
-  });
+  }, 60_000); // a fresh on-disk database runs every migration: slow on CI runners
 });

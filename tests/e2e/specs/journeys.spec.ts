@@ -209,6 +209,25 @@ test("owner invites a teammate, who opens the link in a new browser and joins", 
   await expect(page.getByRole("heading", { name: "No pending invites" })).toBeVisible();
 });
 
+test("signed in, the logo and the home page take you into the app; signed out, they don't", async ({
+  page,
+}) => {
+  const { name } = await signUp(page);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/app$/);
+
+  await page.goto("/login");
+  await page.getByRole("link", { name: "Openline" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+
+  await page.getByRole("button", { name: `Account menu for ${name}` }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByRole("link", { name: "Openline" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("link", { name: "Start free trial" }).first()).toBeVisible();
+});
+
 test("sign out, then the app redirects to the login page", async ({ page }) => {
   const { name } = await signUp(page);
   await page.getByRole("button", { name: `Account menu for ${name}` }).click();

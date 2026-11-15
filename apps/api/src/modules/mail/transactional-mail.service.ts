@@ -19,6 +19,15 @@ interface Message {
   action: { label: string; url: string };
 }
 
+interface TeamMessage {
+  kind: "contact_enquiry";
+  to: string;
+  subject: string;
+  text: string;
+  /** Bare, validated address. */
+  replyTo?: string;
+}
+
 /** "Openline <no-reply@openline.local>" → { name, email }. */
 export function parseFrom(from: string): { email: string; name?: string } {
   const match = /^\s*(.*?)\s*<([^>]+)>\s*$/.exec(from);
@@ -120,6 +129,37 @@ export class TransactionalMailService {
       ],
       action: { label: "Accept the invite", url },
     });
+  }
+
+  /**
+   * A plain-text notification to Openline's own team (e.g. a website enquiry). The caller builds
+   * and sanitises the text; it is escaped again for the HTML part. Never logs subject, body or
+   * addresses (they carry the visitor's personal data). Returns false when it could not be sent,
+   * so the caller can tell the visitor to try again.
+   */
+  async sendToTeam(message: TeamMessage): Promise<boolean> {
+    if (!this.adapter) {
+      console.warn(`[mail:${message.kind}] not sent (MAIL_TRANSPORT=log)`);
+      return true;
+    }
+    try {
+      await this.adapter.send({
+        from: this.from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        html:
+          `<!doctype html><html><body><pre style="font-family:Arial,sans-serif;font-size:14px;` +
+          `white-space:pre-wrap">${escapeHtml(message.text)}</pre></body></html>`,
+        headers: { "Auto-Submitted": "auto-generated" },
+        replyTo: message.replyTo,
+        messageId: newMessageId(this.from.email),
+      });
+      return true;
+    } catch (error) {
+      this.logger.error(`Could not send ${message.kind} email (${(error as Error).name})`);
+      return false;
+    }
   }
 
   /** Never throws: a mail outage must not break sign-up or invites (the user can resend). */

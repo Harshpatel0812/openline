@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import type { ReactNode } from "react";
 import { ToastProvider } from "@/components/ui";
+import { SITE, SITE_URL } from "@/config/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: { default: "Openline", template: "%s · Openline" },
-  description:
-    "The outreach CRM that keeps you out of spam, out of trouble, and true to your word.",
+  description: SITE.tagline,
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {

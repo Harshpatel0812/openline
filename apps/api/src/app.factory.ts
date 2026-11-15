@@ -8,7 +8,7 @@ import { ErrorFilter } from "./common/error.filter";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const CSRF_HEADER = "x-openline-csrf";
-const CSRF_EXEMPT = /^\/v1\/public\/unsubscribe\/[^/]+$/;
+const CSRF_EXEMPT = /^\/v1\/public\/(?:unsubscribe\/[^/]+|contact)$/;
 
 /**
  * Security and HTTP setup shared by main.ts and the integration tests, so tests exercise the
@@ -54,7 +54,8 @@ export function configureApp(app: NestExpressApplication): NestExpressApplicatio
   // CSRF: browsers cannot add a custom header to a cross-site request without a CORS
   // preflight, and CORS only allows our web origin. Combined with SameSite=Lax cookies.
   // Exempt: the public one-click unsubscribe, posted by mail providers (no session, no cookie
-  // used; the signed token in the URL is the only authority).
+  // used; the signed token in the URL is the only authority), and the public website contact
+  // form (no session; its only effect is one rate-limited email to our own inbox).
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (
       !SAFE_METHODS.has(req.method) &&

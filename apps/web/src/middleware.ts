@@ -5,13 +5,22 @@ import { NextResponse, type NextRequest } from "next/server";
  *  1. Content-Security-Policy with a per-request nonce. Next.js reads the nonce from the request
  *     header and adds it to its own scripts, so only our scripts can run (XSS containment).
  *  2. Cheap auth pre-check for /app (the API is the real gate; this avoids flashing the shell).
+ *  3. Signed-in visitors to the home page (e.g. clicking the logo) go straight into the app. Only
+ *     "/" does this, never /login: with an expired cookie, /app sends you to /login, which must not
+ *     send you back.
  */
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const hasSession = request.cookies.has("ol_session") || request.cookies.has("__Host-ol_session");
+
+  if (pathname === "/" && hasSession) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/app";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
 
   if (pathname === "/app" || pathname.startsWith("/app/")) {
-    const hasSession =
-      request.cookies.has("ol_session") || request.cookies.has("__Host-ol_session");
     if (!hasSession) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";

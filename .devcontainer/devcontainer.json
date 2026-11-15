@@ -1,0 +1,18 @@
+{
+  // Run Openline in a GitHub Codespace: Code → Codespaces → "Create codespace on main".
+  // Installs and builds on first start, then runs `pnpm dev` and opens the app in a browser tab.
+  "name": "Openline",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "hostRequirements": { "memory": "8gb" },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Openline", "onAutoForward": "openBrowser" },
+    "4000": { "label": "API (reached through the web app)", "onAutoForward": "silent" }
+  },
+  "postCreateCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm build",
+  "postAttachCommand": "bash .devcontainer/start.sh",
+  "customizations": {
+    "codespaces": { "openFiles": ["README.md"] },
+    "vscode": { "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"] }
+  }
+}

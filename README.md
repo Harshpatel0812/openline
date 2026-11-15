@@ -20,6 +20,21 @@ rather than bolted on.
 Every data table is isolated per workspace with Postgres row-level security, and real email is only
 ever sent from production (`APP_ENV=production`).
 
+## See it live (GitHub Codespaces)
+
+No install needed: GitHub runs Openline for you in the cloud.
+
+1. On the repository page click **Code → Codespaces → Create codespace on main**.
+2. Wait 3–5 minutes the first time while it installs and builds. A terminal then shows
+   `Starting Openline at https://…-3000.app.github.dev` and the app opens in a new browser tab
+   (if it doesn't, open the **Ports** tab and click the globe next to port 3000).
+3. Sign up. The verification link is printed in that terminal (`[mail:verify_email]`).
+
+The link works only for you while you're signed in to GitHub (to share it, set port 3000 to
+Public in the Ports tab). A codespace stops after 30 minutes without use; open it again from
+**Code → Codespaces** and your data is still there. GitHub's free plan includes a monthly
+allowance of codespace hours; stop or delete codespaces you aren't using.
+
 ## Run it on your computer
 
 You need **Node.js 22** (from [nodejs.org](https://nodejs.org)) and **pnpm 10** (`corepack enable`,

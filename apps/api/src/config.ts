@@ -54,6 +54,22 @@ const EnvSchema = z.object({
   RUN_SCHEDULER: z.enum(["true", "false"]).optional(),
   /** Guardrail: OUTREACH_TRANSPORT=real outside production must be explicitly allowed. */
   ALLOW_REAL_SENDING: z.enum(["true", "false"]).optional(),
+  /** Sprint 4: how often each mailbox is checked for replies (runs with RUN_SCHEDULER). */
+  REPLY_SYNC_INTERVAL_MS: z.coerce.number().int().min(10_000).default(120_000),
+  /** Model reply classifications per mailbox per UTC day; beyond it the keyword rules decide. */
+  REPLY_CLASSIFY_DAILY_CAP: z.coerce.number().int().min(0).max(100_000).default(200),
+
+  // ---------------------------------------------------------------- Sprint 4: Scout (ADR 0005)
+  /** bedrock (production) | anthropic (local dev, test key) | fake (dev/test only) | off. */
+  AI_PROVIDER: z.enum(["bedrock", "anthropic", "fake", "off"]).default("off"),
+  AI_MODEL_SMALL: z.string().trim().max(200).optional(),
+  AI_MODEL_LARGE: z.string().trim().max(200).optional(),
+  /** Bedrock region (falls back to AWS_REGION). */
+  AI_AWS_REGION: z.string().trim().max(40).optional(),
+  AWS_REGION: z.string().trim().max(40).optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
+  SCOUT_DRAFTS_PER_USER_PER_HOUR: z.coerce.number().int().positive().default(30),
 });
 
 type Env = z.infer<typeof EnvSchema>;
@@ -85,7 +101,58 @@ export type AppConfig = Omit<
   outreach: OutreachTransport;
   /** SMTP mailboxes on private/loopback hosts: development and test only. */
   allowPrivateSmtpHosts: boolean;
+  /** Scout model access (see resolveAiConfig). */
+  ai: ScoutAiConfig;
 };
+
+export interface ScoutAiConfig {
+  provider: "bedrock" | "anthropic" | "fake" | "off";
+  models: { small: string; large: string };
+  region?: string;
+  anthropicApiKey?: string;
+  timeoutMs: number;
+  draftsPerUserPerHour: number;
+  /** Website research may reach private/loopback hosts: development and test only. */
+  allowPrivateResearchHosts: boolean;
+}
+
+/**
+ * Scout's provider rules: `fake` only in development/test; `anthropic` (direct API, no
+ * zero-retention agreement) never in production; real providers need explicit model ids.
+ */
+export function resolveAiConfig(parsed: Env, appEnv: AppEnv): ScoutAiConfig {
+  const devOrTest = appEnv === "development" || appEnv === "test";
+  const provider = parsed.AI_PROVIDER;
+  if (provider === "fake" && !devOrTest) {
+    throw new Error("AI_PROVIDER=fake is only allowed in development and test");
+  }
+  if (provider === "anthropic" && appEnv === "production") {
+    throw new Error("AI_PROVIDER=anthropic is for development; production uses bedrock");
+  }
+  if (provider === "anthropic" && !parsed.ANTHROPIC_API_KEY) {
+    throw new Error("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY");
+  }
+  const region = parsed.AI_AWS_REGION || parsed.AWS_REGION || undefined;
+  if (provider === "bedrock" && !region) {
+    throw new Error("AI_PROVIDER=bedrock requires AI_AWS_REGION or AWS_REGION");
+  }
+  const real = provider === "bedrock" || provider === "anthropic";
+  if (real && (!parsed.AI_MODEL_SMALL || !parsed.AI_MODEL_LARGE)) {
+    throw new Error(`AI_PROVIDER=${provider} requires AI_MODEL_SMALL and AI_MODEL_LARGE`);
+  }
+  return {
+    provider,
+    models: {
+      small: parsed.AI_MODEL_SMALL || "fake-small",
+      large: parsed.AI_MODEL_LARGE || "fake-large",
+    },
+    region,
+    anthropicApiKey: provider === "anthropic" ? parsed.ANTHROPIC_API_KEY : undefined,
+    timeoutMs: parsed.AI_TIMEOUT_MS,
+    draftsPerUserPerHour: parsed.SCOUT_DRAFTS_PER_USER_PER_HOUR,
+    allowPrivateResearchHosts: devOrTest,
+  };
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = EnvSchema.parse(env);
@@ -136,9 +203,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         }
       : undefined;
 
+  const ai = resolveAiConfig(parsed, appEnv);
+
   const cookieSecure = production;
   return {
     ...parsed,
+    ai,
     // Production applies migrations as a separate deploy step with the owner role; the API itself
     // connects as a role that owns nothing (see infra/terraform/README.md).
     AUTO_MIGRATE: parsed.AUTO_MIGRATE ? parsed.AUTO_MIGRATE === "true" : !production,

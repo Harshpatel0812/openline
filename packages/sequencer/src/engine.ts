@@ -52,29 +52,21 @@ import {
 } from "@openline/db";
 import {
   buildUnsubscribeHeaders,
-  CaptureAdapter,
   createUnsubscribeToken,
-  GmailAdapter,
   newMessageId,
-  openJson,
-  pinSmtpConfig,
   renderEmail,
   SendError,
-  SmtpAdapter,
   type MailAdapter,
-  type MailboxSecret,
   type OutgoingEmail,
 } from "@openline/email";
 import { SENDING_DEFAULTS } from "@openline/shared";
+import { createMailAdapter, hasReplyAfterLastStep, maybeAutoPauseMailbox } from "./mailbox";
 import type { RunSummary, Sequencer, SequencerOptions } from "./types";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const MAX_ATTEMPTS = 5;
-/** Auto-pause a mailbox when more than this share of its last 24h sends hard-bounced. */
-const BOUNCE_PAUSE_RATE = SENDING_DEFAULTS.bounceRatePauseThreshold;
-const BOUNCE_MIN_SAMPLE = 20;
 
 /** How long a 'sending' reservation is trusted before we assume its worker died mid-send. */
 const RESERVATION_TIMEOUT_MS = 10 * MINUTE;
@@ -145,34 +137,12 @@ export function createSequencer(options: SequencerOptions): Sequencer {
   async function adapterFor(mailbox: Mailbox): Promise<MailAdapter> {
     const custom = options.adapterFor?.(mailbox);
     if (custom) return custom;
-    const transport = options.outreach;
-    if (transport.mode === "capture") return new CaptureAdapter();
-    if (transport.mode === "sandbox") return new SmtpAdapter(transport.smtp);
-
-    const secret = openJson<MailboxSecret>(
-      mailbox.secretSealed,
-      options.secretsKey,
-      mailbox.workspaceId,
-    );
-    if (mailbox.provider === "smtp" && secret.kind === "smtp") {
-      // Re-resolved and checked on every send, then connected by address: a DNS answer that
-      // changed since the mailbox was connected can't point us at our own network.
-      const smtp = await pinSmtpConfig(
-        {
-          host: mailbox.smtpHost ?? "",
-          port: mailbox.smtpPort ?? 587,
-          secure: mailbox.smtpSecure ?? false,
-          username: secret.username,
-          password: secret.password,
-        },
-        { allowPrivate: options.allowPrivateSmtpHosts === true },
-      );
-      return new SmtpAdapter(smtp);
-    }
-    if (mailbox.provider === "gmail" && secret.kind === "oauth" && options.google) {
-      return new GmailAdapter(options.google, secret.refreshToken);
-    }
-    throw new SendError(`No way to send from a ${mailbox.provider} mailbox here`, "auth");
+    return createMailAdapter(mailbox, {
+      outreach: options.outreach,
+      secretsKey: options.secretsKey,
+      google: options.google,
+      allowPrivateSmtpHosts: options.allowPrivateSmtpHosts,
+    });
   }
 
   // ------------------------------------------------------------------ helpers
@@ -329,6 +299,12 @@ export function createSequencer(options: SequencerOptions): Sequencer {
         reason: "send_unconfirmed",
         error: "We couldn't confirm whether this step was sent. Check the mailbox's Sent folder.",
       };
+    }
+
+    // A reply that arrived after the last step ends the sequence, even if reply sync's own update
+    // of the enrollment hasn't landed yet (or a person resumed it): never follow up on a reply.
+    if (await hasReplyAfterLastStep(tx, workspaceId, enrollment.id)) {
+      return { kind: "end", state: "replied", reason: "reply_received" };
     }
 
     const [contact] = await tx
@@ -559,12 +535,23 @@ export function createSequencer(options: SequencerOptions): Sequencer {
         updatedAt: t,
       })
       .where(and(eq(enrollments.id, a.enrollment.id), eq(enrollments.workspaceId, workspaceId)));
+    if (!a.nextStep) {
+      await tx
+        .update(enrollments)
+        .set({ state: "completed", nextRunAt: null, lastDecision: "completed", lastError: null })
+        .where(activeEnrollment(workspaceId, a.enrollment.id));
+      return;
+    }
+    // An out-of-office that arrived while this step was in flight already moved the schedule past
+    // the return date: never pull it earlier (GREATEST semantics), and keep its decision.
+    const next = new Date(t.getTime() + a.nextStep.delayDays * DAY).toISOString();
+    const keepOutOfOffice = sql`(${enrollments.lastDecision} = 'out_of_office' AND ${enrollments.nextRunAt} > ${next}::timestamptz)`;
     await tx
       .update(enrollments)
       .set({
-        state: a.nextStep ? "active" : "completed",
-        nextRunAt: a.nextStep ? new Date(t.getTime() + a.nextStep.delayDays * DAY) : null,
-        lastDecision: a.nextStep ? "sent" : "completed",
+        state: "active",
+        nextRunAt: sql`CASE WHEN ${keepOutOfOffice} THEN ${enrollments.nextRunAt} ELSE ${next}::timestamptz END`,
+        lastDecision: sql`CASE WHEN ${keepOutOfOffice} THEN 'out_of_office' ELSE 'sent' END`,
         lastError: null,
       })
       .where(activeEnrollment(workspaceId, a.enrollment.id));
@@ -639,7 +626,7 @@ export function createSequencer(options: SequencerOptions): Sequencer {
             updatedAt: t,
           })
           .where(activeEnrollment(workspaceId, id));
-        await maybeAutoPause(tx, workspaceId, plan.mailbox.id, t);
+        await maybeAutoPauseMailbox(tx, workspaceId, plan.mailbox.id, t);
       });
       await releaseLease(workspaceId, id);
       return;
@@ -671,45 +658,6 @@ export function createSequencer(options: SequencerOptions): Sequencer {
         .where(activeEnrollment(workspaceId, id)),
     );
     await releaseLease(workspaceId, id);
-  }
-
-  /** Pauses a mailbox whose hard-bounce rate over the last 24 h is too high. */
-  async function maybeAutoPause(tx: Tx, workspaceId: string, mailboxId: string, t: Date) {
-    const since = new Date(t.getTime() - DAY);
-    const [sent] = await tx
-      .select({ n: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.workspaceId, workspaceId),
-          eq(messages.mailboxId, mailboxId),
-          eq(messages.direction, "outbound"),
-          sql`${messages.sentAt} > ${since}`,
-        ),
-      );
-    const [bounced] = await tx
-      .select({ n: sql<number>`count(*)::int` })
-      .from(enrollments)
-      .where(
-        and(
-          eq(enrollments.workspaceId, workspaceId),
-          eq(enrollments.mailboxId, mailboxId),
-          eq(enrollments.state, "bounced"),
-          sql`${enrollments.updatedAt} > ${since}`,
-        ),
-      );
-    const total = (sent?.n ?? 0) + (bounced?.n ?? 0);
-    if (total >= BOUNCE_MIN_SAMPLE && (bounced?.n ?? 0) / total > BOUNCE_PAUSE_RATE) {
-      await tx
-        .update(mailboxes)
-        .set({
-          status: "paused",
-          lastError:
-            "Paused automatically: too many bounces in 24 hours. Clean your list, then resume.",
-          updatedAt: t,
-        })
-        .where(and(eq(mailboxes.id, mailboxId), eq(mailboxes.workspaceId, workspaceId)));
-    }
   }
 
   // ------------------------------------------------------------------ one enrollment

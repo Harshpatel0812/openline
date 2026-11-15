@@ -84,6 +84,10 @@ export interface MailboxDto {
   lastError: string | null;
   ownerId: string;
   createdAt: string;
+  /** Reply detection (Sprint 4): off / on / error (see lastSyncError). */
+  replyDetection: "off" | "on" | "error";
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
 }
 
 // ------------------------------------------------------------------ sequences
@@ -202,6 +206,8 @@ export interface EnrollmentDto {
 
 export interface MessageDto {
   id: string;
+  /** inbound = a reply found by reply detection (Sprint 4). */
+  direction: "outbound" | "inbound";
   sequenceId: string | null;
   stepPosition: number | null;
   subject: string;

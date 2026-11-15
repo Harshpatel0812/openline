@@ -6,6 +6,8 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, cx, Select, Spinner, useToast } from "@/components/ui";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { daysUntil } from "@/lib/format";
+import { INBOX_CHANGED_EVENT } from "@/lib/inbox";
+import type { InboxCountsDto } from "@openline/shared";
 import { Logo } from "./logo";
 import { useMe } from "./me-context";
 
@@ -14,10 +16,14 @@ interface NavItem {
   href?: string;
   soon?: boolean;
   exact?: boolean;
+  /** Count shown next to the label (e.g. replies needing action). */
+  badge?: number;
+  badgeLabel?: string;
 }
 
 const mainNav: NavItem[] = [
   { label: "Today", href: "/app", exact: true },
+  { label: "Inbox", href: "/app/inbox" },
   { label: "Contacts", href: "/app/contacts" },
   { label: "Companies", href: "/app/companies" },
   { label: "Sequences", href: "/app/sequences" },
@@ -64,6 +70,12 @@ function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => 
               )}
             >
               {item.label}
+              {item.badge ? (
+                <span className="ml-auto rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-semibold text-white dark:bg-indigo-500">
+                  {item.badge > 99 ? "99+" : item.badge}
+                  <span className="sr-only"> {item.badgeLabel}</span>
+                </span>
+              ) : null}
             </Link>
           </li>
         );
@@ -72,10 +84,45 @@ function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => 
   );
 }
 
+/** Unhandled replies needing action, for the sidebar badge. Refreshes on navigation and events. */
+function useNeedsActionCount(): number | undefined {
+  const pathname = usePathname();
+  const [count, setCount] = useState<number | undefined>(undefined);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setNonce((n) => n + 1);
+    window.addEventListener(INBOX_CHANGED_EVENT, bump);
+    const timer = setInterval(bump, 120_000);
+    return () => {
+      window.removeEventListener(INBOX_CHANGED_EVENT, bump);
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<InboxCountsDto>("/inbox/counts", { signal: controller.signal })
+      .then((c) => setCount(c.needsAction))
+      .catch(() => {
+        // The badge is a hint; the inbox page shows real errors.
+      });
+    return () => controller.abort();
+  }, [pathname, nonce]);
+
+  return count;
+}
+
 function Navigation({ onNavigate }: { onNavigate?: () => void }) {
+  const needsAction = useNeedsActionCount();
+  const items = mainNav.map((item) =>
+    item.href === "/app/inbox"
+      ? { ...item, badge: needsAction, badgeLabel: "replies need action" }
+      : item,
+  );
   return (
     <nav aria-label="Main" className="space-y-6">
-      <NavLinks items={mainNav} onNavigate={onNavigate} />
+      <NavLinks items={items} onNavigate={onNavigate} />
       <div>
         <h2 className="px-3 pb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase dark:text-slate-400">
           Settings

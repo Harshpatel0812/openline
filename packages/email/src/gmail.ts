@@ -3,7 +3,8 @@
  *
  * Scope: https://www.googleapis.com/auth/gmail.send — a "sensitive" scope, which needs Google's
  * OAuth verification but NOT the CASA security assessment that restricted scopes (reading mail)
- * require. Reply detection (Sprint 4) will add gmail.metadata, a restricted scope.
+ * require. Reply detection (Sprint 4) asks for gmail.readonly — a restricted scope — only when the
+ * user turns it on (incremental consent, see GMAIL_READONLY_SCOPE).
  *
  * Uses fetch directly (no googleapis SDK) to keep the dependency surface small; `fetchImpl` is
  * injectable for tests.
@@ -17,6 +18,9 @@ export const GMAIL_SCOPES = [
   "openid",
 ];
 
+/** Restricted scope for reply detection; requested only when the user turns it on. */
+export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+
 export interface GoogleOAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -29,12 +33,14 @@ export function googleAuthorizeUrl(
   config: GoogleOAuthConfig,
   state: string,
   loginHint?: string,
+  /** Added to GMAIL_SCOPES, e.g. [GMAIL_READONLY_SCOPE] for incremental consent. */
+  extraScopes: string[] = [],
 ): string {
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: "code",
-    scope: GMAIL_SCOPES.join(" "),
+    scope: [...GMAIL_SCOPES, ...extraScopes].join(" "),
     access_type: "offline",
     // Always show consent so Google returns a refresh token.
     prompt: "consent",
@@ -97,12 +103,39 @@ export async function buildRawMime(email: OutgoingEmail): Promise<string> {
     headers: email.headers,
     messageId: email.messageId,
     inReplyTo: email.inReplyTo,
-    references: email.inReplyTo,
+    references: email.references ?? email.inReplyTo,
   });
   const buffer: Buffer = await new Promise((resolve, reject) =>
     composer.compile().build((err, message) => (err ? reject(err) : resolve(message))),
   );
   return buffer.toString("base64url");
+}
+
+/**
+ * Trades a refresh token for an access token. Throws SendError("auth") when Google refuses the
+ * refresh token (revoked / expired) and SendError("transient") when Google is unavailable.
+ */
+export async function refreshGoogleAccessToken(
+  config: GoogleOAuthConfig,
+  refreshToken: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<{ accessToken: string; expiresAt: number }> {
+  const res = await fetchImpl("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (res.status === 400 || res.status === 401) {
+    throw new SendError("Google access was revoked — reconnect the mailbox", "auth");
+  }
+  if (!res.ok) throw new SendError("Google is temporarily unavailable", "transient");
+  const body = (await res.json()) as { access_token: string; expires_in: number };
+  return { accessToken: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 };
 }
 
 export class GmailAdapter implements MailAdapter {
@@ -119,23 +152,9 @@ export class GmailAdapter implements MailAdapter {
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 60_000) {
       return this.accessToken.value;
     }
-    const res = await this.fetchImpl("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: this.config.clientId,
-        client_secret: this.config.clientSecret,
-        refresh_token: this.refreshToken,
-        grant_type: "refresh_token",
-      }),
-    });
-    if (res.status === 400 || res.status === 401) {
-      throw new SendError("Google access was revoked — reconnect the mailbox", "auth");
-    }
-    if (!res.ok) throw new SendError("Google is temporarily unavailable", "transient");
-    const body = (await res.json()) as { access_token: string; expires_in: number };
-    this.accessToken = { value: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 };
-    return body.access_token;
+    const token = await refreshGoogleAccessToken(this.config, this.refreshToken, this.fetchImpl);
+    this.accessToken = { value: token.accessToken, expiresAt: token.expiresAt };
+    return token.accessToken;
   }
 
   async verify(): Promise<void> {

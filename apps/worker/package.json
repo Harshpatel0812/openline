@@ -16,8 +16,10 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@openline/ai": "workspace:*",
     "@openline/db": "workspace:*",
     "@openline/email": "workspace:*",
+    "@openline/replies": "workspace:*",
     "@openline/sequencer": "workspace:*",
     "zod": "^4.6.7"
   }

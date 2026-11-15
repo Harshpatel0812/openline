@@ -79,6 +79,9 @@ export function textToHtml(text: string): string {
     .join("\n");
 }
 
+/** The footer's unsubscribe prompt; reply detection strips quoted copies of it before classifying. */
+export const FOOTER_UNSUBSCRIBE_PROMPT = "Don't want to hear from us?";
+
 export interface ComplianceFooter {
   /** CAN-SPAM: sender's valid physical postal address. */
   mailingAddress: string;
@@ -107,11 +110,11 @@ export function renderEmail(
     .replace(/[\r\n]+/g, " ")
     .trim();
   const body = renderText(bodyTemplate, vars);
-  const footerText = `--\n${footer.senderCompany} · ${footer.mailingAddress}\nDon't want to hear from us? Unsubscribe: ${footer.unsubscribeUrl}`;
+  const footerText = `--\n${footer.senderCompany} · ${footer.mailingAddress}\n${FOOTER_UNSUBSCRIBE_PROMPT} Unsubscribe: ${footer.unsubscribeUrl}`;
   const footerHtml =
     `<p style="color:#64748b;font-size:12px;margin-top:24px">` +
     `${escapeHtml(footer.senderCompany)} · ${escapeHtml(footer.mailingAddress)}<br>` +
-    `Don't want to hear from us? <a href="${escapeHtml(footer.unsubscribeUrl)}">Unsubscribe</a></p>`;
+    `${FOOTER_UNSUBSCRIBE_PROMPT} <a href="${escapeHtml(footer.unsubscribeUrl)}">Unsubscribe</a></p>`;
   return {
     subject,
     text: `${body.trim()}\n\n${footerText}\n`,

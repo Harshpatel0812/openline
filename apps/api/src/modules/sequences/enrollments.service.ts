@@ -373,6 +373,7 @@ export class EnrollmentsService {
       const rows = await tx
         .select({
           id: messages.id,
+          direction: messages.direction,
           sequenceId: enrollments.sequenceId,
           stepPosition: messages.stepPosition,
           subject: messages.subject,

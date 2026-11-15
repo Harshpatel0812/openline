@@ -14,6 +14,7 @@ import {
   workspaces,
 } from "./schema";
 import { withIdentity, withTenant } from "./tenant";
+import { aiActions, aiUsage, websiteCache } from "./schema";
 
 /**
  * The most important test in the codebase: one workspace can never read or write
@@ -196,5 +197,272 @@ describe("tenant isolation (row-level security)", () => {
         await tx.execute(sql`UPDATE audit_log SET action = 'x'`);
       }),
     ).rejects.toThrow();
+  });
+});
+
+/** Scout tables (0007): drafts, the usage ledger and the website cache are per workspace. */
+describe("tenant isolation: Scout tables", () => {
+  let handle: DatabaseHandle;
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  let user = "";
+  const contactOf: Record<string, string> = {};
+
+  beforeAll(async () => {
+    handle = createDatabase(process.env.TEST_DATABASE_URL ?? "pglite://memory");
+    await migrate(handle);
+    user = await withIdentity(handle.db, async (tx) => {
+      const [u] = await tx
+        .insert(users)
+        .values({ email: `scout-${randomUUID()}@a.com`, name: "S", passwordHash: "x" })
+        .returning();
+      return u!.id;
+    });
+    for (const ws of [wsA, wsB]) {
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `lead@${ws.slice(0, 8)}.com` })
+          .returning();
+        contactOf[ws] = c!.id;
+        await tx.insert(aiActions).values({
+          workspaceId: ws,
+          userId: user,
+          kind: "draft_email",
+          contactId: c!.id,
+          proposal: { subject: "Hi", body: "Hello", citations: [] },
+          model: "fake-large",
+        });
+        await tx.insert(aiUsage).values({
+          workspaceId: ws,
+          userId: user,
+          feature: "draft_email",
+          model: "fake-large",
+          inputTokens: 10,
+          outputTokens: 5,
+          credits: 1,
+        });
+        await tx.insert(websiteCache).values({ workspaceId: ws, domain: "acme.com", pages: [] });
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  it("each workspace sees only its own drafts, usage and cached pages", async () => {
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      for (const table of [aiActions, aiUsage, websiteCache]) {
+        const rows = await tx.select().from(table);
+        expect(rows.map((r) => r.workspaceId)).toEqual([wsA]);
+      }
+    });
+    const none = await withIdentity(handle.db, (tx) => tx.select().from(aiActions));
+    expect(none).toHaveLength(0);
+  });
+
+  it("refuses writes into another workspace", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(aiUsage).values({
+          workspaceId: wsB,
+          feature: "draft_email",
+          model: "m",
+          inputTokens: 0,
+          outputTokens: 0,
+          credits: 0,
+        }),
+      ),
+    ).rejects.toThrow();
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      await tx.update(aiActions).set({ status: "rejected" });
+      await tx.update(websiteCache).set({ ok: false });
+      await tx.delete(websiteCache);
+    });
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      expect((await tx.select().from(aiActions))[0]!.status).toBe("proposed");
+      expect((await tx.select().from(websiteCache))[0]!.ok).toBe(true);
+    });
+  });
+
+  it("the usage ledger is append-only and drafts can't be deleted by the app role", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsB }, (tx) =>
+        tx.execute(sql`UPDATE ai_usage SET credits = 0`),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(handle.db, { workspaceId: wsB }, (tx) => tx.execute(sql`DELETE FROM ai_usage`)),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(handle.db, { workspaceId: wsB }, (tx) => tx.execute(sql`DELETE FROM ai_actions`)),
+    ).rejects.toThrow();
+  });
+
+  it("deleting a contact deletes the drafts about them", async () => {
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      await tx.delete(contacts).where(sql`id = ${contactOf[wsB]!}`);
+      expect(await tx.select().from(aiActions)).toHaveLength(0);
+    });
+  });
+});
+
+describe("reply detection (0006): sync claims, inbound messages", () => {
+  let handle: DatabaseHandle;
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  const mailbox: Record<string, string> = {};
+  const contact: Record<string, string> = {};
+
+  beforeAll(async () => {
+    handle = createDatabase(process.env.TEST_DATABASE_URL ?? "pglite://memory");
+    await migrate(handle);
+    const userId = await withIdentity(handle.db, async (tx) => {
+      const [u] = await tx
+        .insert(users)
+        .values({ email: `r-${randomUUID()}@a.com`, name: "R", passwordHash: "x" })
+        .returning();
+      return u!.id;
+    });
+    for (const ws of [wsA, wsB]) {
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `lead@${ws.slice(0, 8)}.com` })
+          .returning();
+        contact[ws] = c!.id;
+        const rows = await tx
+          .insert(mailboxes)
+          .values([
+            {
+              workspaceId: ws,
+              userId,
+              provider: "smtp" as const,
+              email: `on@${ws.slice(0, 8)}.com`,
+              secretSealed: "sealed-credentials",
+              replyDetection: "on" as const,
+            },
+            {
+              workspaceId: ws,
+              userId,
+              provider: "smtp" as const,
+              email: `off@${ws.slice(0, 8)}.com`,
+              secretSealed: "sealed-credentials",
+            },
+            {
+              workspaceId: ws,
+              userId,
+              provider: "smtp" as const,
+              email: `gone@${ws.slice(0, 8)}.com`,
+              secretSealed: "",
+              status: "disconnected" as const,
+              replyDetection: "on" as const,
+            },
+          ])
+          .returning();
+        mailbox[ws] = rows[0]!.id;
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  const claim = () =>
+    withIdentity(handle.db, (tx) =>
+      tx.execute(sql`SELECT * FROM claim_due_mailbox_syncs(10)`),
+    ).then((r) => (r as unknown as { rows: { workspace_id: string; mailbox_id: string }[] }).rows);
+
+  it("claim_due_mailbox_syncs returns due mailboxes of every workspace once (lease), ids only", async () => {
+    const first = await claim();
+    expect(first.map((r) => r.mailbox_id).sort()).toEqual([mailbox[wsA], mailbox[wsB]].sort());
+    expect(Object.keys(first[0]!).sort()).toEqual(["mailbox_id", "workspace_id"]);
+    expect(await claim()).toEqual([]);
+  });
+
+  it("the scheduler role can't read mailbox credentials or settings", async () => {
+    await expect(
+      handle.db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL ROLE openline_scheduler`);
+        await tx.execute(sql`SELECT secret_sealed FROM mailboxes`);
+      }),
+    ).rejects.toThrow();
+    const rows = await handle.db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL ROLE openline_scheduler`);
+      return tx.execute(sql`SELECT id FROM mailboxes WHERE reply_detection = 'on'`);
+    });
+    expect((rows as unknown as { rows: unknown[] }).rows.length).toBeGreaterThan(0);
+  });
+
+  it("the app role still sees only its own workspace's mailboxes", async () => {
+    const rows = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.select().from(mailboxes),
+    );
+    expect(rows.every((r) => r.workspaceId === wsA)).toBe(true);
+  });
+
+  const reply = (ws: string, messageId: string) =>
+    withTenant(handle.db, { workspaceId: ws }, (tx) =>
+      tx
+        .insert(messages)
+        .values({
+          workspaceId: ws,
+          contactId: contact[ws],
+          mailboxId: mailbox[ws],
+          direction: "inbound",
+          status: "received",
+          messageIdHeader: messageId,
+          subject: "Re: hi",
+          fromEmail: "lead@x.com",
+          bodyText: "Thanks",
+          receivedAt: new Date(),
+          label: "interested",
+          labelSource: "rule",
+        })
+        .onConflictDoNothing()
+        .returning(),
+    );
+
+  it("stores an inbound message once per (mailbox, Message-ID)", async () => {
+    expect(await reply(wsA, "<r1@x.com>")).toHaveLength(1);
+    expect(await reply(wsA, "<r1@x.com>")).toHaveLength(0);
+    expect(await reply(wsB, "<r1@x.com>")).toHaveLength(1); // another mailbox: its own copy
+  });
+
+  it("inbound messages are invisible across workspaces and can't be written into another", async () => {
+    const rows = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.select().from(messages),
+    );
+    expect(rows.every((r) => r.workspaceId === wsA)).toBe(true);
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(messages).values({
+          workspaceId: wsB,
+          direction: "inbound",
+          messageIdHeader: "<sneaky@x.com>",
+          subject: "x",
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("deleting a contact deletes their inbound messages; outbound history stays", async () => {
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      await tx.insert(messages).values({
+        workspaceId: wsB,
+        contactId: contact[wsB],
+        mailboxId: mailbox[wsB],
+        messageIdHeader: "<ol.out@b.com>",
+        subject: "Hi",
+      });
+      await tx.delete(contacts).where(sql`id = ${contact[wsB]}`);
+      const left = await tx.select().from(messages);
+      expect(left.map((m) => m.direction)).toEqual(["outbound"]);
+      expect(left[0]!.contactId).toBeNull();
+    });
   });
 });

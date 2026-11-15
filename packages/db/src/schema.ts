@@ -4,11 +4,13 @@
  * Change a table = write a new migration file AND update this file in the same PR.
  */
 import {
+  bigint,
   boolean,
   integer,
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uuid,
@@ -50,6 +52,12 @@ export const workspaces = pgTable("workspaces", {
   dataRegion: text("data_region").notNull().default("us"),
   trialEndsAt: ts("trial_ends_at").notNull(),
   createdAt: ts("created_at").notNull().defaultNow(),
+  // Scout (0007).
+  scoutEnabled: boolean("scout_enabled").notNull().default(true),
+  scoutMonthlyCredits: integer("scout_monthly_credits").notNull().default(2000),
+  scoutWebResearch: boolean("scout_web_research").notNull().default(true),
+  aboutUs: text("about_us"),
+  valueProposition: text("value_proposition"),
 });
 
 export const workspaceMembers = pgTable(
@@ -161,6 +169,19 @@ export const emailTokens = pgTable("email_tokens", {
 
 export const MAILBOX_PROVIDERS = ["smtp", "gmail", "graph"] as const;
 export const MAILBOX_STATUSES = ["active", "paused", "error", "disconnected"] as const;
+export const REPLY_DETECTION_STATES = ["off", "on", "error"] as const;
+export const REPLY_LABELS = [
+  "interested",
+  "not_now",
+  "referral",
+  "not_interested",
+  "unsubscribe",
+  "out_of_office",
+  "bounce",
+  "other",
+] as const;
+export const LABEL_SOURCES = ["rule", "model", "user"] as const;
+export const MATCH_KINDS = ["thread", "sender", "colleague"] as const;
 
 export const mailboxes = pgTable("mailboxes", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -176,6 +197,21 @@ export const mailboxes = pgTable("mailboxes", {
   smtpSecure: boolean("smtp_secure"),
   secretSealed: text("secret_sealed").notNull(),
   lastError: text("last_error"),
+  // Reply detection (0006). The IMAP login itself is inside secret_sealed.
+  imapHost: text("imap_host"),
+  imapPort: integer("imap_port"),
+  imapSecure: boolean("imap_secure"),
+  replyDetection: text("reply_detection", { enum: REPLY_DETECTION_STATES })
+    .notNull()
+    .default("off"),
+  // bigint as number: IMAP UIDs and UIDVALIDITY are 32-bit unsigned.
+  syncUidValidity: bigint("sync_uidvalidity", { mode: "number" }),
+  syncLastUid: bigint("sync_last_uid", { mode: "number" }),
+  syncHistoryId: text("sync_history_id"),
+  lastSyncedAt: ts("last_synced_at"),
+  lastSyncError: text("last_sync_error"),
+  nextSyncAt: ts("next_sync_at"),
+  syncLockedUntil: ts("sync_locked_until"),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
@@ -258,10 +294,106 @@ export const messages = pgTable("messages", {
   providerMessageId: text("provider_message_id"),
   subject: text("subject").notNull(),
   sentAt: ts("sent_at").notNull().defaultNow(),
-  /** sending = reserved before the network send; unconfirmed = the sender died mid-send. */
-  status: text("status", { enum: ["sending", "sent", "unconfirmed"] })
+  /**
+   * sending = reserved before the network send; unconfirmed = the sender died mid-send;
+   * received = an inbound reply.
+   */
+  status: text("status", { enum: ["sending", "sent", "unconfirmed", "received"] })
     .notNull()
     .default("sent"),
+  // Inbound replies (0006). Bodies are stored for inbound only: plain text, trimmed, ≤ 20k chars.
+  fromEmail: text("from_email"),
+  fromName: text("from_name"),
+  inReplyTo: text("in_reply_to"),
+  referencesHeader: text("references_header"),
+  bodyText: text("body_text"),
+  receivedAt: ts("received_at"),
+  providerThreadId: text("provider_thread_id"),
+  matchKind: text("match_kind", { enum: MATCH_KINDS }),
+  replyToId: uuid("reply_to_id"),
+  label: text("label", { enum: REPLY_LABELS }),
+  labelSource: text("label_source", { enum: LABEL_SOURCES }),
+  labelConfidence: real("label_confidence"),
+  summary: text("summary"),
+  referral: jsonb("referral").$type<{ name?: string; email?: string }>(),
+  handledAt: ts("handled_at"),
+  /** Machine-generated inbound mail (0008): never replied to from the inbox. */
+  autoSubmitted: boolean("auto_submitted").notNull().default(false),
+});
+
+// ---------------------------------------------------------------- Scout (0007)
+
+export const AI_ACTION_KINDS = ["draft_email", "draft_reply"] as const;
+export const AI_ACTION_STATUSES = [
+  "proposed",
+  "approved",
+  "rejected",
+  "executed",
+  "failed",
+] as const;
+
+export interface AiProposalJson {
+  subject?: string;
+  body: string;
+  citations: { claim: string; source: string }[];
+}
+export interface AiSourceJson {
+  id: string;
+  kind: "contact_field" | "web_page" | "message";
+  label: string;
+}
+export interface WebsitePageJson {
+  url: string;
+  title?: string;
+  text: string;
+}
+
+export const aiActions = pgTable("ai_actions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  userId: uuid("user_id").notNull(),
+  kind: text("kind", { enum: AI_ACTION_KINDS }).notNull(),
+  status: text("status", { enum: AI_ACTION_STATUSES }).notNull().default("proposed"),
+  contactId: uuid("contact_id"),
+  messageId: uuid("message_id"),
+  sequenceId: uuid("sequence_id"),
+  stepPosition: integer("step_position"),
+  inputSummary: jsonb("input_summary").$type<Record<string, unknown>>().notNull().default({}),
+  proposal: jsonb("proposal").$type<AiProposalJson>().notNull(),
+  finalSubject: text("final_subject"),
+  finalText: text("final_text"),
+  sources: jsonb("sources").$type<AiSourceJson[]>().notNull().default([]),
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  editDistance: integer("edit_distance"),
+  rejectReason: text("reject_reason"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  decidedAt: ts("decided_at"),
+});
+
+export const aiUsage = pgTable("ai_usage", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  userId: uuid("user_id"),
+  feature: text("feature").notNull(),
+  aiActionId: uuid("ai_action_id"),
+  /** Reply classification only (0008): the mailbox the reply arrived in. */
+  mailboxId: uuid("mailbox_id"),
+  model: text("model").notNull(),
+  inputTokens: integer("input_tokens").notNull(),
+  outputTokens: integer("output_tokens").notNull(),
+  credits: integer("credits").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+export const websiteCache = pgTable("website_cache", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  domain: text("domain").notNull(),
+  pages: jsonb("pages").$type<WebsitePageJson[]>().notNull().default([]),
+  ok: boolean("ok").notNull().default(true),
+  fetchedAt: ts("fetched_at").notNull().defaultNow(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -280,3 +412,6 @@ export type Sequence = typeof sequences.$inferSelect;
 export type SequenceStep = typeof sequenceSteps.$inferSelect;
 export type Enrollment = typeof enrollments.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type AiActionRow = typeof aiActions.$inferSelect;
+export type AiUsageRow = typeof aiUsage.$inferSelect;
+export type WebsiteCacheRow = typeof websiteCache.$inferSelect;

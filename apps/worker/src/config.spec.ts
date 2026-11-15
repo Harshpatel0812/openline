@@ -77,3 +77,25 @@ describe("worker config guardrails", () => {
     });
   });
 });
+
+describe("worker config: reply sync", () => {
+  it("defaults to a 2-minute reply sync and the keyword classifier", () => {
+    const c = loadWorkerConfig(base);
+    expect(c.replySyncIntervalMs).toBe(120_000);
+    expect(c.ai.provider).toBe("off");
+  });
+
+  it("applies the API's Scout provider rules", () => {
+    expect(() =>
+      loadWorkerConfig({
+        ...base,
+        NODE_ENV: "production",
+        APP_ENV: "production",
+        SECRETS_KEY: Buffer.alloc(32, 1).toString("base64"),
+        UNSUBSCRIBE_SECRET: "a-real-unsubscribe-secret-value",
+        AI_PROVIDER: "fake",
+      }),
+    ).toThrow(/fake/);
+    expect(() => loadWorkerConfig({ ...base, AI_PROVIDER: "bedrock" })).toThrow(/region/i);
+  });
+});

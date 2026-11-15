@@ -4,11 +4,15 @@
  */
 export type AiActionStatus = "proposed" | "approved" | "rejected" | "executed" | "failed";
 
+/** Sprint 4 (Scout v1) only proposes drafts; the other kinds arrive with later Scout features. */
+export type AiActionKind =
+  "draft_email" | "draft_reply" | "send_email" | "create_segment" | "update_deal" | "create_task";
+
 export interface AiAction {
   id: string;
   workspaceId: string;
   userId: string;
-  kind: "send_email" | "create_segment" | "update_deal" | "create_task";
+  kind: AiActionKind;
   proposal: unknown;
   /** Record IDs the model used, shown to the user as citations. */
   sources: string[];

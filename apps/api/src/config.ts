@@ -15,6 +15,8 @@ import { z } from "zod";
 // secrets and unsubscribe links in development.
 export const DEV_SECRETS_KEY = Buffer.alloc(32, 7).toString("base64");
 export const DEV_UNSUBSCRIBE_SECRET = "dev-only-unsubscribe-secret-change-me";
+/** Contact-form inbox for development and tests (reserved .example domain, never delivered). */
+export const DEV_CONTACT_INBOX = "hello@openline.example";
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -54,6 +56,10 @@ const EnvSchema = z.object({
   RUN_SCHEDULER: z.enum(["true", "false"]).optional(),
   /** Guardrail: OUTREACH_TRANSPORT=real outside production must be explicitly allowed. */
   ALLOW_REAL_SENDING: z.enum(["true", "false"]).optional(),
+
+  // ---------------------------------------------------------------- OL-E5: public website
+  /** Where website contact-form enquiries are emailed. Required in staging and production. */
+  CONTACT_INBOX: z.email().optional(),
 });
 
 type Env = z.infer<typeof EnvSchema>;
@@ -66,6 +72,7 @@ export type AppConfig = Omit<
   | "UNSUBSCRIBE_SECRET"
   | "MAIL_TRANSPORT"
   | "OUTREACH_TRANSPORT"
+  | "CONTACT_INBOX"
 > & {
   AUTO_MIGRATE: boolean;
   RUN_SCHEDULER: boolean;
@@ -73,6 +80,7 @@ export type AppConfig = Omit<
   UNSUBSCRIBE_SECRET: string;
   MAIL_TRANSPORT: "smtp" | "log" | "capture";
   OUTREACH_TRANSPORT: "real" | "sandbox" | "capture";
+  CONTACT_INBOX: string;
   cookieSecure: boolean;
   cookieName: string;
   /** Parsed SECRETS_KEY (32 bytes). */
@@ -127,6 +135,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   });
   const OUTREACH_TRANSPORT = outreach.mode;
 
+  // Deployed environments must name a real inbox; the placeholder only exists for dev and tests.
+  if ((appEnv === "production" || appEnv === "staging") && !parsed.CONTACT_INBOX) {
+    throw new Error(`APP_ENV=${appEnv} requires CONTACT_INBOX`);
+  }
+  const CONTACT_INBOX = parsed.CONTACT_INBOX ?? DEV_CONTACT_INBOX;
+
   const google =
     parsed.GOOGLE_OAUTH_CLIENT_ID && parsed.GOOGLE_OAUTH_CLIENT_SECRET
       ? {
@@ -151,6 +165,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     UNSUBSCRIBE_SECRET,
     MAIL_TRANSPORT,
     OUTREACH_TRANSPORT,
+    CONTACT_INBOX,
     secretsKey,
     google,
     appEnv,

@@ -96,6 +96,7 @@ export async function buildRawMime(email: OutgoingEmail): Promise<string> {
     html: email.html,
     headers: email.headers,
     messageId: email.messageId,
+    replyTo: email.replyTo,
     inReplyTo: email.inReplyTo,
     references: email.inReplyTo,
   });

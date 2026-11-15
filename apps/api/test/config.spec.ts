@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEV_SECRETS_KEY, DEV_UNSUBSCRIBE_SECRET, loadConfig } from "../src/config";
+import {
+  DEV_CONTACT_INBOX,
+  DEV_SECRETS_KEY,
+  DEV_UNSUBSCRIBE_SECRET,
+  loadConfig,
+} from "../src/config";
 
 const prod = {
   NODE_ENV: "production",
@@ -8,6 +13,7 @@ const prod = {
   SECRETS_KEY: Buffer.alloc(32, 1).toString("base64"),
   UNSUBSCRIBE_SECRET: "a-real-production-secret-of-good-length",
   SMTP_URL: "smtp://mail.example.com:587",
+  CONTACT_INBOX: "hello@openline.test",
 };
 
 describe("config (Sprint 3)", () => {
@@ -92,5 +98,16 @@ describe("config (Sprint 3)", () => {
     const c = loadConfig({ GOOGLE_OAUTH_CLIENT_ID: "id", GOOGLE_OAUTH_CLIENT_SECRET: "s" });
     expect(c.google?.redirectUri).toBe("http://localhost:3000/api/v1/mailboxes/google/callback");
     expect(loadConfig({ GOOGLE_OAUTH_CLIENT_ID: "id" }).google).toBeUndefined();
+  });
+
+  it("CONTACT_INBOX defaults in dev/test and is required in staging and production", () => {
+    expect(loadConfig({ NODE_ENV: "development" }).CONTACT_INBOX).toBe(DEV_CONTACT_INBOX);
+    expect(loadConfig({ NODE_ENV: "test" }).CONTACT_INBOX).toBe("hello@openline.example");
+    expect(loadConfig(prod).CONTACT_INBOX).toBe("hello@openline.test");
+    expect(() => loadConfig({ ...prod, CONTACT_INBOX: undefined })).toThrow(/CONTACT_INBOX/);
+    expect(() => loadConfig({ ...prod, APP_ENV: "staging", CONTACT_INBOX: undefined })).toThrow(
+      /CONTACT_INBOX/,
+    );
+    expect(() => loadConfig({ CONTACT_INBOX: "not-an-email" })).toThrow();
   });
 });

@@ -1,9 +1,18 @@
 /** Public pricing (USD). Flat per team; every feature on every plan. Annual = 2 months free. */
+import {
+  BILLING_PERIODS,
+  BillingPeriodSchema,
+  PLAN_IDS,
+  PlanIdSchema,
+  type BillingPeriod,
+  type PlanId,
+} from "@openline/shared";
 
-export type BillingPeriod = "monthly" | "annual";
+export type { BillingPeriod, PlanId };
+export { BILLING_PERIODS, PLAN_IDS };
 
 export interface Plan {
-  id: "solo" | "team" | "growth" | "scale";
+  id: PlanId;
   name: string;
   summary: string;
   monthly: number;
@@ -17,6 +26,7 @@ export interface Plan {
   popular?: boolean;
 }
 
+/** One entry per id in PLAN_IDS, in the same order (checked below, so a mismatch fails the build). */
 export const PLANS: Plan[] = [
   {
     id: "solo",
@@ -68,6 +78,10 @@ export const PLANS: Plan[] = [
     support: "Named customer success manager",
   },
 ];
+
+if (PLANS.map((p) => p.id).join() !== PLAN_IDS.join()) {
+  throw new Error("PLANS must list exactly the plan ids in PLAN_IDS (@openline/shared), in order");
+}
 
 export const ADD_ONS = [
   { name: "Extra mailbox", price: "$5 / month", note: "Connect one more sending mailbox." },
@@ -132,7 +146,7 @@ export const PRICING_FAQ = [
   },
   {
     q: "How does the free trial work?",
-    a: "You get the Team plan free for 14 days, with no card required. When it ends, you choose a plan — nothing is charged unless you do.",
+    a: "You get the Team plan free for 14 days, with no card required. The plan you pick on this page is saved with your workspace, and you can change it any time in Settings → Plan & billing. Payments aren't switched on yet, so nothing is charged; we'll ask you to confirm before your trial ends.",
   },
   {
     q: "What does annual billing save?",
@@ -155,6 +169,35 @@ export const PRICING_FAQ = [
     a: "No. Each plan is one flat price for the whole team, with a set number of users included. Need one more person? An extra user is $15 a month.",
   },
 ];
+
+export function getPlan(id: PlanId): Plan {
+  const plan = PLANS.find((p) => p.id === id);
+  if (!plan) throw new Error(`Unknown plan ${id}`);
+  return plan;
+}
+
+/** Reads `?plan=&billing=` from a URL. Unknown values give null; billing defaults to monthly. */
+export function parsePlanParams(params: {
+  get(name: string): string | null;
+}): { plan: PlanId; billing: BillingPeriod } | null {
+  const plan = PlanIdSchema.safeParse(params.get("plan"));
+  if (!plan.success) return null;
+  const billing = BillingPeriodSchema.safeParse(params.get("billing"));
+  return { plan: plan.data, billing: billing.success ? billing.data : "monthly" };
+}
+
+/** `?plan=team&billing=annual` (with the leading `?`), or "" without a plan. */
+export function planQuery(choice: { plan: PlanId; billing: BillingPeriod } | null): string {
+  if (!choice) return "";
+  return `?${new URLSearchParams({ plan: choice.plan, billing: choice.billing }).toString()}`;
+}
+
+/** "Team — $99/mo billed annually" */
+export function describePlanChoice(plan: PlanId, billing: BillingPeriod): string {
+  const p = getPlan(plan);
+  const price = billing === "annual" ? p.annual : p.monthly;
+  return `${p.name} — ${formatPrice(price)}/mo billed ${billing === "annual" ? "annually" : "monthly"}`;
+}
 
 export function formatPrice(n: number): string {
   return `$${n.toLocaleString("en-US")}`;

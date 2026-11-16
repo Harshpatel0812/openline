@@ -1,6 +1,11 @@
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import { eq, withTenant, workspaces, type DatabaseHandle, type Tx } from "@openline/db";
-import type { WorkspaceSettingsDto, WorkspaceSettingsInputSchema } from "@openline/shared";
+import type {
+  PlanChoiceDto,
+  PlanChoiceInput,
+  WorkspaceSettingsDto,
+  WorkspaceSettingsInputSchema,
+} from "@openline/shared";
 import type { z } from "zod";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, notFound } from "../../common/http";
@@ -69,6 +74,34 @@ export class WorkspaceService {
         });
       }
       return toDto(await loadWorkspace(tx, auth.workspaceId));
+    });
+  }
+
+  /**
+   * Sets or changes the plan the team intends to move to after the trial (owner/admin). Billing
+   * isn't switched on, so this only records intent; it never changes `plan` or the trial end.
+   */
+  setPlanChoice(auth: AuthContext, input: PlanChoiceInput): Promise<PlanChoiceDto> {
+    return this.scope(auth, async (tx) => {
+      const before = await loadWorkspace(tx, auth.workspaceId);
+      await tx
+        .update(workspaces)
+        .set({ chosenPlan: input.plan, chosenBilling: input.billing })
+        .where(eq(workspaces.id, auth.workspaceId));
+      await this.audit.record(tx, {
+        workspaceId: auth.workspaceId,
+        actorId: auth.userId,
+        action: "workspace.plan_choice_changed",
+        entity: "workspace",
+        entityId: auth.workspaceId,
+        metadata: {
+          from: before.chosenPlan
+            ? { plan: before.chosenPlan, billing: before.chosenBilling }
+            : null,
+          to: { plan: input.plan, billing: input.billing },
+        },
+      });
+      return { chosenPlan: input.plan, chosenBilling: input.billing };
     });
   }
 }

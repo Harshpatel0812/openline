@@ -62,6 +62,9 @@ export const workspaces = pgTable("workspaces", {
   valueProposition: text("value_proposition"),
   // Pipeline (0011): default currency for new deals (ISO 4217).
   currency: char("currency", { length: 3 }).notNull().default("USD"),
+  // Plan picked on /pricing (0012). Intent only: billing isn't switched on yet.
+  chosenPlan: text("chosen_plan", { enum: ["solo", "team", "growth", "scale"] }),
+  chosenBilling: text("chosen_billing", { enum: ["monthly", "annual"] }),
 });
 
 export const workspaceMembers = pgTable(

@@ -5,7 +5,9 @@ import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, cx, Select, Spinner, useToast } from "@/components/ui";
 import { api, ApiError, errorMessage, stopAuthRedirects } from "@/lib/api";
+import { getPlan } from "@/content/pricing";
 import { daysUntil } from "@/lib/format";
+import { BILLING_PATH } from "@/lib/plan-flow";
 import { INBOX_CHANGED_EVENT } from "@/lib/inbox";
 import { TASKS_CHANGED_EVENT } from "@/lib/tasks";
 import type { InboxCountsDto, TaskCountsDto } from "@openline/shared";
@@ -40,6 +42,7 @@ const settingsNav: NavItem[] = [
   { label: "Mailboxes", href: "/app/settings/mailboxes" },
   { label: "Team", href: "/app/settings/team" },
   { label: "Suppressions", href: "/app/settings/suppressions" },
+  { label: "Plan & billing", href: "/app/settings/billing" },
 ];
 
 function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
@@ -250,14 +253,23 @@ function VerifyEmailBanner() {
   );
 }
 
+/** "Team trial: 12 days left" — links to Plan & billing, where the plan is picked or changed. */
 function TrialBadge() {
   const { me } = useMe();
   if (me.workspace.plan !== "trial" || !me.workspace.trialEndsAt) return null;
   const days = daysUntil(me.workspace.trialEndsAt);
+  const chosen = me.workspace.chosenPlan ? getPlan(me.workspace.chosenPlan).name : null;
+  const trial = chosen ? `${chosen} trial` : "Trial";
   return (
-    <Badge tone={days <= 3 ? "warning" : "accent"}>
-      {days === 0 ? "Trial ends today" : `Trial: ${days} day${days === 1 ? "" : "s"} left`}
-    </Badge>
+    <Link
+      href={BILLING_PATH}
+      data-testid="trial-badge"
+      className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
+    >
+      <Badge tone={days <= 3 ? "warning" : "accent"} className="hover:underline">
+        {days === 0 ? `${trial} ends today` : `${trial}: ${days} day${days === 1 ? "" : "s"} left`}
+      </Badge>
+    </Link>
   );
 }
 

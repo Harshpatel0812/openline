@@ -4,18 +4,24 @@ All cloud changes go through Terraform — no clicking in the AWS console.
 
 ```text
 infra/terraform/
+├─ bootstrap/          One-time: state bucket, GitHub OIDC, deploy roles, Bedrock policy, budget
 ├─ modules/            Reusable building blocks (network, ecs-service, rds, redis, s3, secrets)
 └─ envs/
-   ├─ dev/             Separate AWS account
-   ├─ staging/         Separate AWS account, deployed on merge to main
-   └─ prod/            Separate AWS account, deployed only after manual approval
+   ├─ dev/             Developer sandbox
+   ├─ staging/         Deployed on merge to main
+   └─ prod/            Deployed only after manual approval
 ```
 
 ## Status
 
-Week 0 skeleton. Region is a required variable and is **not decided yet** — set it in each
-environment's `terraform.tfvars` (copy from `terraform.tfvars.example`). Modules are filled in during
-Week 0 / Sprint 1 (epic OL-E1).
+- Region: **us-east-1 (N. Virginia)**, the default in every environment.
+- `bootstrap/` is ready: Harsh runs it once, following `docs/runbooks/aws-setup.md`.
+- Staging and production start in **one AWS account**, separated by deploy roles, GitHub
+  environments (production needs Harsh's approval) and name prefixes. Moving production to its own
+  account (AWS Organizations) is planned before SOC 2 Type II.
+- Environment modules (network, database, containers) come in the infrastructure sprint; until then
+  `DEPLOY_ENABLED` stays off.
+- CI runs `terraform fmt -check` and `terraform validate` on every pull request.
 
 ## Rules
 

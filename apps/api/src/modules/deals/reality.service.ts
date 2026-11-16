@@ -44,6 +44,8 @@ import {
 } from "@openline/shared";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
+import { RateLimiter } from "../../common/rate-limit";
+import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 import { ScoutModelService } from "../scout/scout-model.service";
@@ -51,6 +53,7 @@ import { DealsService } from "./deals.service";
 
 const MANAGERS = new Set(["owner", "admin", "manager"]);
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 
 const utcDayStart = (now: Date) =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -88,12 +91,18 @@ export class RealityCheckerService implements OnApplicationShutdown {
  */
 @Injectable()
 export class RealityService {
+  /** "Check now" per person per hour, across deals (in memory, like Scout drafts). */
+  private readonly perUser: RateLimiter;
+
   constructor(
     @Inject(DB) private readonly handle: DatabaseHandle,
+    @Inject(CONFIG) config: AppConfig,
     private readonly audit: AuditService,
     private readonly deals: DealsService,
     private readonly runner: RealityCheckerService,
-  ) {}
+  ) {
+    this.perUser = new RateLimiter(config.ai.realityChecksPerUserPerHour, HOUR_MS);
+  }
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return withTenant(this.handle.db, { workspaceId: auth.workspaceId, userId: auth.userId }, fn);
@@ -134,31 +143,33 @@ export class RealityService {
 
   async run(auth: AuthContext, id: string): Promise<RealityCheckDto> {
     const now = new Date();
-    await this.scope(auth, async (tx) => {
-      const deal = await this.deal(tx, auth, id);
-      this.assertCanAct(auth, deal.ownerId);
-      if (
-        (await this.manualRunsToday(tx, auth.workspaceId, id, now)) >=
-        REALITY_LIMITS.runsPerDealPerDay
-      ) {
-        const retryAfterSec = Math.ceil(
-          (utcDayStart(now).getTime() + DAY_MS - now.getTime()) / 1000,
-        );
-        throw new ApiException(
-          HttpStatus.TOO_MANY_REQUESTS,
-          "rate_limited",
-          `This deal has been checked ${REALITY_LIMITS.runsPerDealPerDay} times today. Try again tomorrow.`,
-          { retryAfterSec },
-        );
-      }
-    });
-    // The model step runs outside any transaction (packages/replies).
+    // The daily limit is checked by the runner's first transaction with the deal row locked, and
+    // the run is recorded there as pending: concurrent requests can't both pass it (SEC-M1).
     const result = await this.runner.checker.check({
       workspaceId: auth.workspaceId,
       dealId: id,
       trigger: "manual",
       userId: auth.userId,
+      authorize: async (tx, deal) => {
+        this.assertCanAct(auth, deal.ownerId);
+        this.perUser.consume(`${auth.workspaceId}:${auth.userId}`);
+        if (
+          (await this.manualRunsToday(tx, auth.workspaceId, id, now)) >=
+          REALITY_LIMITS.runsPerDealPerDay
+        ) {
+          const retryAfterSec = Math.ceil(
+            (utcDayStart(now).getTime() + DAY_MS - now.getTime()) / 1000,
+          );
+          throw new ApiException(
+            HttpStatus.TOO_MANY_REQUESTS,
+            "rate_limited",
+            `This deal has been checked ${REALITY_LIMITS.runsPerDealPerDay} times today. Try again tomorrow.`,
+            { retryAfterSec },
+          );
+        }
+      },
     });
+    // The model step runs outside any transaction (packages/replies).
     if (!result) throw notFound("Deal");
     const check = await this.scope(auth, (tx) => this.latestDto(tx, auth, id));
     return check!;
@@ -177,7 +188,13 @@ export class RealityService {
     const [row] = await tx
       .select()
       .from(dealChecks)
-      .where(and(eq(dealChecks.workspaceId, ws), eq(dealChecks.dealId, dealId)))
+      .where(
+        and(
+          eq(dealChecks.workspaceId, ws),
+          eq(dealChecks.dealId, dealId),
+          eq(dealChecks.status, "done"),
+        ),
+      )
       .orderBy(desc(dealChecks.ranAt), desc(dealChecks.id))
       .limit(1);
     return row;
@@ -445,18 +462,16 @@ export class RealityService {
     id: string,
   ): Promise<{ deal: DealDetailDto; check: RealityCheckDto }> {
     const ws = auth.workspaceId;
-    return this.scope(auth, async (tx) => {
+    const result = await this.scope(auth, async (tx) => {
       const deal = await this.deals.editableIn(tx, auth, id);
       const row = await this.openProposal(tx, ws, id);
       if (!row?.proposal.stageMove) throw notFound("Suggestion");
       const now = new Date();
       if (row.proposal.stageMove.fromStageId !== deal.stageId) {
-        // The deal moved since the check: the suggestion no longer applies.
+        // The deal moved since the check: the suggestion no longer applies. Closed here and
+        // committed (QA-M2); the 409 is thrown after the transaction.
         await this.close(tx, row, "superseded", null, now);
-        throw conflict(
-          "suggestion_stale",
-          "The deal has moved since this check. Run the Reality Check again.",
-        );
+        return "stale" as const;
       }
       // proposed → approved (a person clicked) → executed (moved), in one transaction.
       const detail = await this.deals.moveIn(
@@ -485,6 +500,13 @@ export class RealityService {
       });
       return { deal: detail, check: (await this.latestDto(tx, auth, id))! };
     });
+    if (result === "stale") {
+      throw conflict(
+        "suggestion_stale",
+        "The deal has moved since this check. Run the Reality Check again.",
+      );
+    }
+    return result;
   }
 
   async dismissSuggestion(

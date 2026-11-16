@@ -447,12 +447,17 @@ Negotiation 75 %, Won 100 %, Lost 0 %.
 **Activity and flags on `DealDto`.** `lastActivityAt` = latest of: deal created/edited, stage
 change, a task on the deal completed, and any email (sent or received; not an unsent reservation)
 with any of the deal's contacts — the email part is read from `messages` at query time.
-`isStale`: open and `now − lastActivityAt` strictly greater than the stage's `staleAfterDays` × 24 h.
+`isStale`: open and `now − lastActivityAt` strictly greater than the stage's `staleAfterDays` × 24 h
+(exact hours: the SQL filters use `n * interval '24 hours'`, so a DST change in the database
+session's time zone doesn't move the line).
 `nextStepOverdue` / `closeDateOverdue`: open and the date is before today in the workspace time
 zone (not on the day itself). `missingNextStep`: open, past the first open stage, no next step.
-`flagged=1` = any of these four, or an undismissed model flag (`criterion_missing`,
-`stage_ahead_of_evidence`) of the deal's latest Reality Check while the deal is still in the stage
-it was checked in. `flagCount` counts the same (four booleans + those model flags).
+`flagged=1` = any of these four not dismissed in the Reality Check panel since the latest activity
+(codes `stale`, `next_step_overdue`, `close_date_passed`, `no_next_step`), or an undismissed model
+flag (`criterion_missing`, `stage_ahead_of_evidence`) of the deal's latest Reality Check that had
+model evidence, while the deal is still in the stage it was checked in (a later deterministic-only
+run doesn't clear them). `flagCount` counts the same. The four booleans themselves stay as they are
+(a dismissed `stale` deal still has `isStale: true`).
 `canEdit` tells the UI whether the caller may edit/move.
 
 **Summary math.** Per stage and per forecast bucket: `count` (all deals), and per currency
@@ -462,11 +467,16 @@ only; other currencies are listed in `byCurrency` (no conversion) and `multiCurr
 `thisMonth` / `thisQuarter`: open deals whose `expectedCloseDate` falls in the current calendar
 month / quarter of the workspace time zone.
 
-**Timeline visibility.** Everyone sees email subject, direction and date. Inbound `snippet` (≤200,
-plain text) only for the caller's own mailboxes (managers: all), as in the inbox; outbound bodies
-aren't stored (`snippet: null`). Task titles only for the task's owner and managers.
+**Timeline visibility (same rule as the inbox).** Managers and above see every email's subject,
+direction, date and inbound `snippet` (≤200, plain text). A rep sees those for emails in their own
+mailboxes; for an email in a teammate's mailbox only `direction` and `at`, with `subject: null`,
+`snippet: null` and `teammateMailbox: true` (the UI shows "Email (in a teammate's mailbox)").
+Outbound bodies aren't stored (`snippet: null`). Task titles only for the task's owner and managers.
 
-**Related changes.** Tasks: `dealId` on create/update/`TaskDto`, `GET /v1/tasks?dealId=`.
+**Related changes.** Tasks: `dealId` on create/update/`TaskDto`, `GET /v1/tasks?dealId=`. Linking
+a task to a deal (create, or changing `dealId` on update) needs edit rights on the deal (its owner or
+manager+), else 403 `forbidden`; completing a linked task counts as deal activity only when the
+task's owner can edit the deal.
 Inbox: `InboxMessageDto.dealPrefill { name: "<Company> — new deal", contactId, companyId,
 openDeals }` for "Create deal". Audit: `deal.created|updated|moved` (ids, kinds, field names; never
 names, next steps or reasons), `pipeline.stages_updated` (counts).
@@ -477,41 +487,55 @@ Types and schemas: `packages/shared/src/reality.ts` (migration 0013). Runner:
 `packages/replies/src/reality.ts` (`createRealityChecker`, shared by the API and the worker);
 evidence + rules: `packages/ai/src/reality.ts`.
 
-| Method + path                                            | Who                         | Body                 | Response                                                                               |
-| -------------------------------------------------------- | --------------------------- | -------------------- | -------------------------------------------------------------------------------------- |
-| `POST /v1/deals/:id/reality-check`                       | owner of the deal, manager+ | —                    | 200 `RealityCheckDto` · 429 `rate_limited` (10 manual runs per deal per UTC day)       |
-| `GET /v1/deals/:id/reality-check`                        | all                         | —                    | `{ check: RealityCheckDto \| null }` (latest run)                                      |
-| `POST /v1/deals/:id/reality-check/flags/:flagId/dismiss` | owner of the deal, manager+ | `{ reason (1–300) }` | 200 `RealityCheckDto` · 400 bad id/reason · 404 flag not in the latest check           |
-| `POST /v1/deals/:id/reality-check/suggestion/accept`     | owner of the deal, manager+ | —                    | 200 `{ deal: DealDetailDto, check }` · 404 no open suggestion · 409 `suggestion_stale` |
-| `POST /v1/deals/:id/reality-check/suggestion/dismiss`    | owner of the deal, manager+ | `{ reason? (≤300) }` | 200 `RealityCheckDto` · 404 no open suggestion                                         |
+| Method + path                                            | Who                         | Body                 | Response                                                                                                                                     |
+| -------------------------------------------------------- | --------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/deals/:id/reality-check`                       | owner of the deal, manager+ | —                    | 200 `RealityCheckDto` · 429 `rate_limited` (10 manual runs per deal per UTC day; 60 per person per hour, `REALITY_CHECKS_PER_USER_PER_HOUR`) |
+| `GET /v1/deals/:id/reality-check`                        | all                         | —                    | `{ check: RealityCheckDto \| null }` (latest run)                                                                                            |
+| `POST /v1/deals/:id/reality-check/flags/:flagId/dismiss` | owner of the deal, manager+ | `{ reason (1–300) }` | 200 `RealityCheckDto` · 400 bad id/reason · 404 flag not in the latest check                                                                 |
+| `POST /v1/deals/:id/reality-check/suggestion/accept`     | owner of the deal, manager+ | —                    | 200 `{ deal: DealDetailDto, check }` · 404 no open suggestion · 409 `suggestion_stale`                                                       |
+| `POST /v1/deals/:id/reality-check/suggestion/dismiss`    | owner of the deal, manager+ | `{ reason? (≤300) }` | 200 `RealityCheckDto` · 404 no open suggestion                                                                                               |
 
 Another workspace's deal is 404 everywhere; someone else's deal for a rep is 403 (`forbidden`).
 
 **A run.** Evidence = emails (both directions; bodies exist for inbound only, quoted history
 trimmed) with the deal's contacts from the last 90 days (newest 30, ≤ 30k characters), the
 contacts' names and job titles and the deal's next step, all fenced as untrusted. The small model
-answers per evidence type; code keeps a quote only if it is verbatim (whitespace-normalised, 8–300
-characters) in the message it names, otherwise the type is `unclear`. `assessDeal` (code) then
+answers per evidence type; code keeps a `yes` or a `no` only with a quote that is verbatim
+(whitespace-normalised, 8–300 characters) in the message it names, otherwise the type is `unclear`
+(so an email can't raise a flag without words code can find in it). `assessDeal` (code) then
 computes the evidence stage and flags: `criterion_missing`, `stage_ahead_of_evidence` (model) and
 `next_step_overdue`, `no_next_step`, `close_date_passed`, `stale` (deterministic). Won/lost deals
 get no flags and no model call.
 
 **Deterministic only** (`deterministicOnly: true`, `deterministicReason`): `scout_off`,
-`no_provider` (AI_PROVIDER=off), `budget` (month's credits used up, or the Reality Check's own
-spend this month ≥ 25 % of them), `no_emails`, `model_error` (failed or invalid twice; never an
-error response). Spend is recorded in `ai_usage` as feature `reality_check`.
+`no_provider` (AI_PROVIDER=off), `budget` (the run's worst case doesn't fit in the month's credits
+or in 25 % of them, counting spend and other running checks' reservations), `no_emails`,
+`model_error` (failed or invalid twice; never an error response). Spend is recorded in `ai_usage`
+as feature `reality_check`. A deterministic-only run leaves the open suggestion as it is.
 
-**Stored.** One `deal_checks` row per run (append-only): evidence (`present`, quote ≤ 300,
+**Concurrency.** A run first locks the deal row and, under a per-workspace advisory lock, checks
+the budget and inserts its `deal_checks` row as `pending` with the worst-case credits of the model
+step reserved (every attempt, one token per byte of prompt, full output cap). Concurrent "Check
+now" requests and scheduled runs therefore count each other in the daily limit and the budget. The
+row becomes `done` when the run finishes (`failed` if it throws; the run still counts toward the
+daily limit). Only `done` rows are returned.
+
+**Stored.** One `deal_checks` row per run (append-only once `done`): evidence (`present`, quote ≤ 300,
 messageId — no other email text), all flags, evidence stage, the deal's stage at the time, model,
 tokens, trigger (`manual` | `scheduled`). Flag ids are stable per code + criterion.
 
 **Quotes are private like the timeline.** A quote is returned only if its message is still on the
 deal and the caller is a manager+ or owns the mailbox it came through; otherwise the item carries
-`quoteHidden: true` (and `messageId`) without the words.
+`quoteHidden: true` (and `messageId`) without the words. Evidence `present` (yes / no / unclear)
+and the flags stay visible to every rep even when they rest only on a teammate's mail: they say
+what the pipeline needs, not what the email said (product decision, Sprint 6). Deleting an inbound
+email — e.g. with its contact — removes quotes taken from it from every stored check (trigger
+`messages_scrub_deal_check_quotes`, 0013); the `present` value stays.
 
 **Dismissals.** "Not right — …" stores a `deal_flag_dismissals` row (append-only, feeds the
 evaluation set); the flag comes back with `dismissed { reason, at, by }` and drops out of
-`flagged` / `flagCount` until there is activity on the deal after the dismissal. Dismissing
+`flagged` / `flagCount` (and the board's flag icon) until there is activity on the deal after the
+dismissal — model and deterministic flags alike. Dismissing
 `stage_ahead_of_evidence` also withdraws the suggestion. Audit: `deal.reality_flag_dismissed` (flag
 id + code, no reason text).
 
@@ -520,7 +544,8 @@ id + code, no reason text).
 move, replaced (old one `rejected`, superseded) when it suggests another, closed when it suggests
 none. Accept = proposed → executed in one transaction through the normal move (history row,
 `deal.moved` audit with `viaRealityCheck: true`, plus `ai.stage_move_accepted`); if the deal moved
-since the check it is 409 `suggestion_stale`. A dismissed move (`ai.stage_move_dismissed`) isn't
+since the check it is 409 `suggestion_stale`, and that suggestion is left closed (superseded); the
+panel reloads the check. A dismissed move (`ai.stage_move_dismissed`) isn't
 proposed again until there is new activity. Nothing ever moves on its own.
 
 **Schedule.** The worker (and the API with `RUN_SCHEDULER=true`) polls every 5 minutes;

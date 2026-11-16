@@ -304,9 +304,11 @@ export function RealityCheckPanel({
       const open = c.flags.filter((f) => !f.dismissed).length;
       setLive(`Reality Check done: ${open} flag${open === 1 ? "" : "s"}.`);
     } catch (err) {
+      // 429: today's checks for this deal, or this person's hourly allowance (server says which).
       const msg =
         err instanceof ApiError && err.status === 429
-          ? `You've used today's ${REALITY_LIMITS.runsPerDealPerDay} checks for this deal. Try again tomorrow.`
+          ? err.message ||
+            `You've used today's ${REALITY_LIMITS.runsPerDealPerDay} checks for this deal. Try again tomorrow.`
           : errorMessage(err);
       setRunError(msg);
       setLive(msg);
@@ -337,7 +339,14 @@ export function RealityCheckPanel({
         toast("Suggestion dismissed. The deal stays where it is.", "info");
       }
     } catch (err) {
-      toast(errorMessage(err), "error");
+      if (err instanceof ApiError && err.status === 409) {
+        // The deal moved since the check: the server closed the suggestion; show the panel as it
+        // is now (no stale "Move to" button left behind).
+        reload();
+        toast(err.message || "The deal has moved since this check. Run it again.", "info");
+      } else {
+        toast(errorMessage(err), "error");
+      }
     } finally {
       setActing(null);
     }

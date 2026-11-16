@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { creditsFor } from "./budget";
 import { AiError } from "./provider";
 import { FakeProvider } from "./providers/fake";
 import {
@@ -9,7 +10,9 @@ import {
   realityFlagId,
   REALITY_MAX_CHARS,
   REALITY_MAX_MESSAGES,
+  REALITY_MAX_OUTPUT_TOKENS,
   REALITY_SYSTEM_PROMPT,
+  realityMaxCredits,
   type AssessDealInput,
   type DealEvidence,
   type EvidencePresence,
@@ -509,7 +512,7 @@ describe("extractDealEvidence", () => {
         need_confirmed: { present: "yes" },
         // Too long → unclear.
         decision_maker_engaged: { present: "yes", quote: "x".repeat(301), messageId: "m2" },
-        // "no" without a quote stands.
+        // "no" without a verified quote can't be checked either → unclear (SEC-L1).
         next_step_dated: { present: "no", messageId: "m7" },
         made_up_type: { present: "yes" },
       }),
@@ -522,8 +525,22 @@ describe("extractDealEvidence", () => {
       verbal_yes: { present: "unclear" },
       need_confirmed: { present: "unclear" },
       decision_maker_engaged: { present: "unclear" },
-      next_step_dated: { present: "no" },
+      next_step_dated: { present: "unclear" },
     });
+  });
+
+  it('a "no" without a verified quote is unclear, so it can\'t raise a flag (SEC-L1)', async () => {
+    const fake = new FakeProvider([
+      answer({
+        budget_discussed: { present: "no" },
+        decision_maker_engaged: { present: "no", messageId: "m2" },
+        proposal_sent: { present: "no", quote: "We never got a proposal", messageId: "m2" },
+      }),
+    ]);
+    const res = await extractDealEvidence(fake, extractInput(thread));
+    expect(res.evidence.budget_discussed).toEqual({ present: "unclear" });
+    expect(res.evidence.decision_maker_engaged).toEqual({ present: "unclear" });
+    expect(res.evidence.proposal_sent).toEqual({ present: "unclear" });
   });
 
   it("accepts the real message id too, and quotes from the subject don't count", async () => {
@@ -569,6 +586,20 @@ describe("extractDealEvidence", () => {
     expect(res.evidence.budget_discussed.present).toBe("no");
     const one = fake.calls[0]!.messages[0]!.content.length / 4;
     expect(res.usage.inputTokens).toBeGreaterThan(one * 2 - 10);
+  });
+
+  it("realityMaxCredits covers both attempts at their worst (SEC-M1 reservation)", async () => {
+    const fake = new FakeProvider(["not json", "still not json"]);
+    const input = extractInput(thread);
+    const res = await extractDealEvidence(fake, input);
+    const spent = creditsFor({ ...res.usage, outputTokens: 2 * REALITY_MAX_OUTPUT_TOKENS });
+    expect(realityMaxCredits(input)).toBeGreaterThanOrEqual(spent);
+    // One token per byte, not per character: non-Latin text reserves more.
+    const wide = {
+      ...input,
+      messages: input.messages.map((m) => ({ ...m, text: "日本".repeat(500) })),
+    };
+    expect(realityMaxCredits(wide)).toBeGreaterThan(realityMaxCredits(input));
   });
 
   it("invalid twice → everything unclear, valid false, usage kept", async () => {

@@ -8,11 +8,20 @@
  * Used by the API ("Check now") and by the worker / in-process scheduler (daily, via
  * claim_due_reality_checks — the one cross-tenant query, ids only).
  *
- * Model use is gated per workspace: Scout on, a provider configured, credits left this month, and
- * the Reality Check's own spend this month below REALITY_BUDGET_SHARE of them. Otherwise only the
+ * Model use is gated per workspace: Scout on, a provider configured, and the run's worst-case cost
+ * (realityMaxCredits) fitting both in the month's credits and in REALITY_BUDGET_SHARE of them,
+ * counting what is spent (ai_usage) and what running checks have reserved. Otherwise only the
  * deterministic flags (dates, stale, no next step) run. Spend is recorded in ai_usage as feature
  * "reality_check". The model is called outside any transaction; a model failure never fails the
  * check (it falls back to deterministic only).
+ *
+ * Concurrency (SEC-M1): the first transaction locks the deal row (FOR UPDATE), runs the caller's
+ * `authorize` hook (the API's permission and daily-limit check) and, under a per-workspace
+ * advisory lock, checks the budget and inserts the run as a `pending` deal_checks row holding its
+ * reserved credits. Concurrent runs therefore see each other in both limits. The last transaction
+ * completes that row (`done`); a run that throws is marked `failed` (its reservation released).
+ * A deterministic-only run (Scout off, budget, model error) never touches the open stage-move
+ * proposal (QA-L1).
  *
  * Stored email text is limited to the verified quotes (≤ 300 characters each).
  */
@@ -22,9 +31,11 @@ import {
   creditsFor,
   extractDealEvidence,
   monthStart,
+  realityMaxCredits,
   trimQuoted,
   type DealAssessment,
   type DealEvidence,
+  type ExtractDealEvidenceInput,
   type LlmProvider,
   type LlmUsage,
   type RealityFlagCode,
@@ -52,6 +63,7 @@ import {
   workspaces,
   type DealEvidenceItemJson,
   type DealFlagJson,
+  type DealRow,
   type Db,
   type Tx,
 } from "@openline/db";
@@ -94,14 +106,22 @@ export interface RealityCheckerOptions {
   logger?: Pick<Console, "warn" | "error">;
 }
 
+export interface RealityCheckInput {
+  workspaceId: string;
+  dealId: string;
+  trigger: RealityTrigger;
+  userId?: string | null;
+  /**
+   * Runs in the first transaction with the deal row locked, before the run is recorded; throw to
+   * refuse (the API checks who may run it and the daily limit here, so concurrent requests can't
+   * both pass).
+   */
+  authorize?: (tx: Tx, deal: DealRow) => Promise<void>;
+}
+
 export interface RealityChecker {
   /** Runs one check now. null when the deal isn't in the workspace. */
-  check(input: {
-    workspaceId: string;
-    dealId: string;
-    trigger: RealityTrigger;
-    userId?: string | null;
-  }): Promise<RealityRunResult | null>;
+  check(input: RealityCheckInput): Promise<RealityRunResult | null>;
   /** One scheduler pass: claims due deals (≤ batch) and checks each; never throws per deal. */
   runOnce(batch?: number): Promise<RealitySummary>;
   start(pollMs?: number): void;
@@ -117,12 +137,20 @@ function rowsOf<T>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? (result as T[])) as T[];
 }
 
-/** Why the model step may not run for this workspace now (null = it may). */
+/** Reservations of running checks older than this are ignored (a crashed run's lease). */
+const RESERVATION_TTL_MS = 15 * 60_000;
+
+/**
+ * Why the model step may not run for this workspace now (null = it may). `reserve` is the run's
+ * worst-case cost; spend and the reservations of other running checks count against both limits.
+ * Call it under the workspace's reality lock (lockWorkspaceBudget) when reserving.
+ */
 export async function realityModelGate(
   tx: Tx,
   workspaceId: string,
   provider: LlmProvider | null | undefined,
   now: Date,
+  reserve = 0,
 ): Promise<Exclude<DeterministicReason, "no_emails" | "model_error"> | null> {
   const [ws] = await tx
     .select({ enabled: workspaces.scoutEnabled, credits: workspaces.scoutMonthlyCredits })
@@ -142,9 +170,30 @@ export async function realityModelGate(
         sql`${aiUsage.createdAt} >= ${monthStart(now).toISOString()}`,
       ),
     );
-  if (Number(row?.used ?? 0) >= ws.credits) return "budget";
-  if (Number(row?.reality ?? 0) >= ws.credits * REALITY_BUDGET_SHARE) return "budget";
+  const [held] = await tx
+    .select({ credits: sql<number>`coalesce(sum(${dealChecks.reservedCredits}), 0)::int` })
+    .from(dealChecks)
+    .where(
+      and(
+        eq(dealChecks.workspaceId, workspaceId),
+        eq(dealChecks.status, "pending"),
+        gte(dealChecks.ranAt, new Date(now.getTime() - RESERVATION_TTL_MS)),
+      ),
+    );
+  const reserved = Number(held?.credits ?? 0);
+  const used = Number(row?.used ?? 0) + reserved;
+  const reality = Number(row?.reality ?? 0) + reserved;
+  if (used >= ws.credits || used + reserve > ws.credits) return "budget";
+  const share = ws.credits * REALITY_BUDGET_SHARE;
+  if (reality >= share || reality + reserve > share) return "budget";
   return null;
+}
+
+/** Serialises budget checks + reservations of one workspace until the transaction ends. */
+export async function lockWorkspaceBudget(tx: Tx, workspaceId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtext('openline:reality_budget'), hashtext(${workspaceId}))`,
+  );
 }
 
 /** The deal's latest activity: its own (edits, moves, tasks) or an email with a deal contact. */
@@ -181,13 +230,8 @@ async function loadStages(tx: Tx, workspaceId: string): Promise<RealityStage[]> 
 }
 
 /** Everything a check needs, read in one transaction (no model call inside it). */
-async function gather(tx: Tx, workspaceId: string, dealId: string, now: Date) {
-  const [deal] = await tx
-    .select()
-    .from(deals)
-    .where(and(eq(deals.id, dealId), eq(deals.workspaceId, workspaceId)))
-    .limit(1);
-  if (!deal) return null;
+async function gather(tx: Tx, workspaceId: string, deal: DealRow, now: Date) {
+  const dealId = deal.id;
   const [ws] = await tx
     .select({ tz: workspaces.defaultTimeZone })
     .from(workspaces)
@@ -252,6 +296,14 @@ async function gather(tx: Tx, workspaceId: string, dealId: string, now: Date) {
     })),
   };
 }
+
+/** What the first transaction of a check hands to the rest of it. */
+type Gathered = Awaited<ReturnType<typeof gather>> & {
+  stage: RealityStage | undefined;
+  modelInput: ExtractDealEvidenceInput;
+  gate: DeterministicReason | null;
+  pendingId: string;
+};
 
 /** Only present / quote (≤ 300, verified) / messageId are stored. */
 function storedEvidence(evidence: DealEvidence | undefined): Record<string, DealEvidenceItemJson> {
@@ -399,24 +451,96 @@ export function createRealityChecker(options: RealityCheckerOptions): RealityChe
     });
   };
 
-  async function check(input: {
-    workspaceId: string;
-    dealId: string;
-    trigger: RealityTrigger;
-    userId?: string | null;
-  }): Promise<RealityRunResult | null> {
+  async function openProposalId(tx: Tx, workspaceId: string, dealId: string) {
+    const [row] = await tx
+      .select({ id: aiActions.id })
+      .from(aiActions)
+      .where(
+        and(
+          eq(aiActions.workspaceId, workspaceId),
+          eq(aiActions.dealId, dealId),
+          eq(aiActions.kind, "deal_stage_move"),
+          eq(aiActions.status, "proposed"),
+        ),
+      )
+      .limit(1);
+    return row?.id;
+  }
+
+  async function check(input: RealityCheckInput): Promise<RealityRunResult | null> {
     const { workspaceId, dealId } = input;
     const userId = input.userId ?? null;
+    const tenant = { workspaceId, ...(userId ? { userId } : {}) };
     const t = now();
-    const gathered = await withTenant(db, { workspaceId }, async (tx) => {
-      const g = await gather(tx, workspaceId, dealId, t);
-      if (!g) return null;
-      return { ...g, gate: await realityModelGate(tx, workspaceId, provider, t) };
+    // 1. Lock the deal, authorize, gather, check the budget and record the run as pending.
+    const gathered = await withTenant(db, tenant, async (tx) => {
+      const [deal] = await tx
+        .select()
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.workspaceId, workspaceId)))
+        .limit(1)
+        .for("update");
+      if (!deal) return null;
+      if (input.authorize) await input.authorize(tx, deal);
+      const g = await gather(tx, workspaceId, deal, t);
+      const stage = g.stages.find((s) => s.id === deal.stageId);
+      const modelInput = {
+        deal: {
+          name: deal.name,
+          stageName: stage?.name ?? "",
+          nextStep: deal.nextStep,
+          nextStepDate: deal.nextStepDate,
+        },
+        contacts: g.contacts,
+        messages: g.messages,
+      };
+      // Closed deals and deals without emails never call the model: nothing to reserve.
+      const wantsModel = stage?.kind === "open" && g.messages.length > 0 && !!provider;
+      const reserve = wantsModel ? realityMaxCredits(modelInput) : 0;
+      await lockWorkspaceBudget(tx, workspaceId);
+      const gate = await realityModelGate(tx, workspaceId, provider, t, reserve);
+      const reserved = wantsModel && !gate ? reserve : 0;
+      const [pending] = await tx
+        .insert(dealChecks)
+        .values({
+          workspaceId,
+          dealId,
+          stageId: deal.stageId,
+          ranAt: t,
+          trigger: input.trigger,
+          ranBy: userId,
+          status: "pending",
+          reservedCredits: reserved,
+        })
+        .returning({ id: dealChecks.id });
+      return { ...g, deal, stage, modelInput, gate, pendingId: pending!.id };
     });
     if (!gathered) return null;
+    const { pendingId } = gathered;
 
-    const currentStage = gathered.stages.find((s) => s.id === gathered.deal.stageId);
-    const isOpen = currentStage?.kind === "open";
+    try {
+      return await complete(input, gathered, t);
+    } catch (error) {
+      // Release the reservation (only pending rows hold one); the run still counts toward the
+      // daily limit.
+      await withTenant(db, tenant, (tx) =>
+        tx
+          .update(dealChecks)
+          .set({ status: "failed" })
+          .where(and(eq(dealChecks.id, pendingId), eq(dealChecks.workspaceId, workspaceId))),
+      ).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async function complete(
+    input: RealityCheckInput,
+    gathered: Gathered,
+    t: Date,
+  ): Promise<RealityRunResult | null> {
+    const { workspaceId, dealId } = input;
+    const userId = input.userId ?? null;
+    const isOpen = gathered.stage?.kind === "open";
     let reason: DeterministicReason | undefined = gathered.gate ?? undefined;
     if (!reason && !gathered.messages.length) reason = "no_emails";
     let evidence: DealEvidence | undefined;
@@ -425,16 +549,7 @@ export function createRealityChecker(options: RealityCheckerOptions): RealityChe
     // Closed deals get no flags: no reason to spend credits on them.
     if (!reason && isOpen && provider) {
       try {
-        const result = await extractDealEvidence(provider, {
-          deal: {
-            name: gathered.deal.name,
-            stageName: currentStage?.name ?? "",
-            nextStep: gathered.deal.nextStep,
-            nextStepDate: gathered.deal.nextStepDate,
-          },
-          contacts: gathered.contacts,
-          messages: gathered.messages,
-        });
+        const result = await extractDealEvidence(provider, gathered.modelInput);
         usage = result.usage;
         model = result.model || null;
         if (result.valid) evidence = result.evidence;
@@ -447,6 +562,7 @@ export function createRealityChecker(options: RealityCheckerOptions): RealityChe
         reason = "model_error";
         log.warn(`reality-check: deal ${dealId} model step failed: ${describe(error)}`);
       }
+      // Recorded before the reservation is released: for a moment both count (never neither).
       await recordUsage(workspaceId, userId, usage, model ?? "");
     }
 
@@ -498,14 +614,10 @@ export function createRealityChecker(options: RealityCheckerOptions): RealityChe
       const visible = assessDeal({ ...base, dismissedFlags }, t);
       const deterministicOnly = !evidence;
       const [row] = await tx
-        .insert(dealChecks)
-        .values({
-          workspaceId,
-          dealId,
+        .update(dealChecks)
+        .set({
+          status: "done",
           stageId: deal.stageId,
-          ranAt: t,
-          trigger: input.trigger,
-          ranBy: userId,
           model,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
@@ -515,21 +627,33 @@ export function createRealityChecker(options: RealityCheckerOptions): RealityChe
           deterministicOnly,
           deterministicReason: deterministicOnly ? (reason ?? null) : null,
         })
+        .where(
+          and(
+            eq(dealChecks.id, gathered.pendingId),
+            eq(dealChecks.workspaceId, workspaceId),
+            eq(dealChecks.status, "pending"),
+          ),
+        )
         .returning({ id: dealChecks.id });
-      const checkId = row!.id;
+      if (!row) throw new Error("reality-check: the pending run was already completed");
+      const checkId = row.id;
       await tx
         .update(deals)
         .set({ realityCheckedAt: t, realityLockedUntil: null })
         .where(and(eq(deals.id, dealId), eq(deals.workspaceId, workspaceId)));
-      const proposalId = await syncProposal(tx, {
-        workspaceId,
-        deal,
-        checkId,
-        model: model ?? "rules",
-        suggestion: evidence ? visible.suggestion : undefined,
-        latestActivityAt: latest,
-        now: t,
-      });
+      // Without the model there is no evidence to judge the stage by: an open proposal from an
+      // earlier model run stays as it is (QA-L1).
+      const proposalId = deterministicOnly
+        ? await openProposalId(tx, workspaceId, dealId)
+        : await syncProposal(tx, {
+            workspaceId,
+            deal,
+            checkId,
+            model: model ?? "rules",
+            suggestion: visible.suggestion,
+            latestActivityAt: latest,
+            now: t,
+          });
       return {
         checkId,
         deterministicOnly,

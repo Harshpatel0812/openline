@@ -109,10 +109,11 @@ tests/e2e, tests/load
 
 - **Phase:** 2 — Build the MVP. Done: Sprints 1–2 (foundation, contacts), Sprint 3 (sending
   engine), Sprint 4 (reply detection, reply inbox, Scout v1), public website (OL-E5), Sprint 5 (tasks,
-  Promise Keeper, Compliance Copilot).
+  Promise Keeper, Compliance Copilot), Sprint 6 (pipeline: stages, deals, board, Pipeline Reality
+  Check).
 - **API contract:** `docs/api/README.md`. PRDs: `docs/product/`.
-- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`, `S5.md`.
-- **Next:** Sprint 6 — pipeline (deals, stages, board) and Pipeline Reality Check.
+- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`, `S5.md`, `S6.md`.
+- **Next:** Sprint 7 — CRM sync: two-way HubSpot and Pipedrive sync (contacts, companies, deals).
 - **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
   emails real prospects. See `infra/terraform/README.md`.
 - **Open decisions:** AWS region / hosting location; company entity; Google verification for

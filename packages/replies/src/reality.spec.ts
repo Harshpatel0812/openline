@@ -251,9 +251,15 @@ describe("reality check runner", () => {
         }),
       );
     const provider = new FakeProvider();
-    await spend(249);
+    // A run starts only when its worst case (reserved before the call) fits in the share.
+    const probe = await seed({ credits: 1000 });
+    await email(probe, NEED);
+    await run(probe, new FakeProvider());
+    const reserve = (await latestCheck(probe)).reservedCredits;
+    expect(reserve).toBeGreaterThan(0);
+    await spend(250 - reserve);
     expect(await run(s, provider)).toMatchObject({ deterministicOnly: false });
-    // That run spent ≥ 1 credit: 250 of 1,000 = the share is used up.
+    // That run spent ≥ 1 credit: the next worst case no longer fits.
     expect(await run(s, provider)).toMatchObject({ deterministicReason: "budget" });
     expect(provider.calls).toHaveLength(1);
 
@@ -347,6 +353,183 @@ describe("reality check runner", () => {
     expect((await run(s, provider))!.proposalId).toBeUndefined();
     await email(s, "Following up on our chat.", new Date(Date.now() + 1_000));
     expect((await run(s, provider))!.proposalId).toBeTruthy();
+  });
+
+  it("a run is pending, with its worst-case credits reserved, while the model thinks (SEC-M1)", async () => {
+    const s = await seed();
+    await email(s, NEED);
+    let during: { status: string; reservedCredits: number }[] = [];
+    const fake = new FakeProvider();
+    const provider = {
+      name: "fake" as const,
+      complete: async (req: LlmRequest) => {
+        during = await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+          tx
+            .select({ status: dealChecks.status, reservedCredits: dealChecks.reservedCredits })
+            .from(dealChecks),
+        );
+        return fake.complete(req);
+      },
+    };
+    await createRealityChecker({ db: handle.db, provider, logger: quiet }).check({
+      workspaceId: s.workspaceId,
+      dealId: s.dealId,
+      trigger: "manual",
+      userId: s.userId,
+    });
+    expect(during).toHaveLength(1);
+    expect(during[0]!.status).toBe("pending");
+    expect(during[0]!.reservedCredits).toBeGreaterThan(0);
+    const check = await latestCheck(s);
+    expect(check.status).toBe("done");
+    const [{ spent }] = await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.select({ spent: aiUsage.credits }).from(aiUsage),
+    ).then((rows) => rows as [{ spent: number }]);
+    expect(check.reservedCredits).toBeGreaterThanOrEqual(spent);
+  });
+
+  /** n more open deals with an email each, in s's workspace. */
+  async function moreDeals(s: Seeded, n: number) {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const id = await withTenant(handle.db, { workspaceId: s.workspaceId }, async (tx) => {
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: s.workspaceId, email: `p${i}-${randomUUID()}@buyer.com` })
+          .returning();
+        const [d] = await tx
+          .insert(deals)
+          .values({
+            workspaceId: s.workspaceId,
+            name: `Deal ${i}`,
+            ownerId: s.userId,
+            stageId: s.stage("Proposal").id,
+            currency: "USD",
+            nextStep: "Call",
+            nextStepDate: "2099-01-01",
+          })
+          .returning();
+        await tx
+          .insert(dealContacts)
+          .values({ workspaceId: s.workspaceId, dealId: d!.id, contactId: c!.id });
+        await tx.insert(messages).values({
+          workspaceId: s.workspaceId,
+          contactId: c!.id,
+          direction: "inbound",
+          messageIdHeader: `<${randomUUID()}@buyer.com>`,
+          subject: "Re: Intro",
+          bodyText: `${NEED} ${NO_BUDGET}`,
+          status: "received",
+          receivedAt: new Date(Date.now() - HOUR),
+          sentAt: new Date(Date.now() - HOUR),
+        });
+        return d!.id;
+      });
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  /** A provider that takes a while, so concurrent checks overlap their model calls. */
+  const slow = (fake: FakeProvider) => ({
+    name: "fake" as const,
+    complete: async (req: LlmRequest) => {
+      await new Promise((r) => setTimeout(r, 40));
+      return fake.complete(req);
+    },
+  });
+
+  const realitySpend = (s: Seeded) =>
+    withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.select().from(aiUsage).where(eq(aiUsage.feature, REALITY_FEATURE)),
+    ).then((rows) => rows.reduce((n, r) => n + r.credits, 0));
+
+  /** Worst case reserved for one of moreDeals()'s deals (probed in a workspace of its own). */
+  async function reserveOfOne() {
+    const probe = await seed();
+    const [dealId] = await moreDeals(probe, 1);
+    await createRealityChecker({
+      db: handle.db,
+      provider: new FakeProvider(),
+      logger: quiet,
+    }).check({ workspaceId: probe.workspaceId, dealId: dealId!, trigger: "manual" });
+    const [row] = await withTenant(handle.db, { workspaceId: probe.workspaceId }, (tx) =>
+      tx.select().from(dealChecks).where(eq(dealChecks.dealId, dealId!)),
+    );
+    return row!.reservedCredits;
+  }
+
+  it("20 concurrent checks can't overshoot the 25 % share (SEC-M1)", async () => {
+    // A share of a little over one worst case: 20 unchecked runs would spend well past it.
+    const share = (await reserveOfOne()) + 2;
+    const s = await seed({ credits: share * 4 });
+    const ids = await moreDeals(s, 20);
+    const fake = new FakeProvider();
+    const checker = createRealityChecker({ db: handle.db, provider: slow(fake), logger: quiet });
+    const results = await Promise.all(
+      ids.map((dealId) =>
+        checker.check({ workspaceId: s.workspaceId, dealId, trigger: "manual", userId: s.userId }),
+      ),
+    );
+    expect(results.every(Boolean)).toBe(true);
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(results.some((r) => r!.deterministicReason === "budget")).toBe(true);
+    expect(await realitySpend(s)).toBeLessThanOrEqual(share);
+    // Nothing is left pending (reservations released).
+    const pending = await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.select().from(dealChecks).where(eq(dealChecks.status, "pending")),
+    );
+    expect(pending).toHaveLength(0);
+  });
+
+  it("20 concurrent checks can't overshoot the monthly budget either (SEC-M1)", async () => {
+    const left = (await reserveOfOne()) + 2;
+    const s = await seed({ credits: 1000 });
+    const ids = await moreDeals(s, 20);
+    await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.insert(aiUsage).values({
+        workspaceId: s.workspaceId,
+        feature: "draft_email",
+        model: "x",
+        inputTokens: 0,
+        outputTokens: 0,
+        credits: 1000 - left,
+      }),
+    );
+    const fake = new FakeProvider();
+    const checker = createRealityChecker({ db: handle.db, provider: slow(fake), logger: quiet });
+    await Promise.all(
+      ids.map((dealId) =>
+        checker.check({ workspaceId: s.workspaceId, dealId, trigger: "scheduled" }),
+      ),
+    );
+    expect(fake.calls.length).toBeGreaterThan(0);
+    const total = await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.select().from(aiUsage),
+    ).then((rows) => rows.reduce((n, r) => n + r.credits, 0));
+    expect(total).toBeLessThanOrEqual(1000);
+  });
+
+  it("deterministic-only runs leave the open proposal alone (QA-L1)", async () => {
+    const s = await seed();
+    await email(s, `${NEED} ${NO_BUDGET}`);
+    const first = await run(s, new FakeProvider());
+    expect(first!.proposalId).toBeTruthy();
+    // No provider, then Scout off, then a model error: the proposal stays open.
+    expect(await run(s, null)).toMatchObject({
+      deterministicOnly: true,
+      proposalId: first!.proposalId,
+    });
+    expect(await run(s, new FakeProvider([new Error("down")]))).toMatchObject({
+      deterministicReason: "model_error",
+      proposalId: first!.proposalId,
+    });
+    await withTenant(handle.db, { workspaceId: s.workspaceId }, (tx) =>
+      tx.update(workspaces).set({ scoutEnabled: false }).where(eq(workspaces.id, s.workspaceId)),
+    );
+    expect(await run(s, new FakeProvider())).toMatchObject({ deterministicReason: "scout_off" });
+    const list = await proposals(s);
+    expect(list.map((p) => p.status)).toEqual(["proposed"]);
   });
 
   it("closed deals get no flags and no model call", async () => {

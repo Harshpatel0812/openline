@@ -378,6 +378,7 @@ function ContactsCard({
             <Button
               size="sm"
               variant="secondary"
+              className="whitespace-nowrap"
               disabled={full}
               onClick={() => {
                 setPicked(null);
@@ -494,7 +495,12 @@ function TimelineItem({ item }: { item: DealTimelineItemDto }) {
             <Badge tone={item.direction === "inbound" ? "info" : "neutral"}>
               {item.direction === "inbound" ? "Reply received" : "Email sent"}
             </Badge>
-            {item.direction === "inbound" ? (
+            {item.teammateMailbox ? (
+              // Same rule as the inbox: a teammate's mail shows only direction and date.
+              <span className="text-slate-700 italic dark:text-slate-300">
+                Email (in a teammate&apos;s mailbox)
+              </span>
+            ) : item.direction === "inbound" ? (
               <Link
                 href={`/app/inbox?view=all&message=${item.messageId}`}
                 className="font-medium break-words text-indigo-700 hover:underline dark:text-indigo-300"

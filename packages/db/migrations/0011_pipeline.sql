@@ -17,6 +17,18 @@
 -- new table, so the seed works whatever role runs migrations) and by the API when a workspace is
 -- created (seedDefaultStages in packages/db/src/pipeline.ts, same list).
 
+-- Same-workspace references (SEC-L3): every link from a deal (company, primary contact, contacts)
+-- and from a task to a deal is a composite foreign key on (workspace_id, id), so a row can never
+-- point into another workspace even if application code forgets a check. Nullable links use
+-- ON DELETE SET NULL (column) (PostgreSQL 15+) so deleting a company / contact / deal clears only
+-- the link, never workspace_id. deals.owner_id stays a plain key to users: removing a member must
+-- neither be blocked by nor delete the deals they own (reassigning them is a manager's job).
+
+-- ---------------------------------------------------------------- composite key targets
+
+ALTER TABLE companies ADD CONSTRAINT companies_workspace_id_id_key UNIQUE (workspace_id, id);
+ALTER TABLE contacts ADD CONSTRAINT contacts_workspace_id_id_key UNIQUE (workspace_id, id);
+
 -- ---------------------------------------------------------------- workspaces.currency
 
 ALTER TABLE workspaces
@@ -85,8 +97,8 @@ CREATE TABLE deals (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id         uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name                 text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120),
-  company_id           uuid REFERENCES companies(id) ON DELETE SET NULL,
-  primary_contact_id   uuid REFERENCES contacts(id) ON DELETE SET NULL,
+  company_id           uuid,
+  primary_contact_id   uuid,
   owner_id             uuid NOT NULL REFERENCES users(id),
   stage_id             uuid NOT NULL,
   -- Integer minor units (cents); NULL = no amount yet. Cap keeps column sums exact in JS numbers.
@@ -104,7 +116,11 @@ CREATE TABLE deals (
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, id),
-  FOREIGN KEY (workspace_id, stage_id) REFERENCES pipeline_stages (workspace_id, id)
+  FOREIGN KEY (workspace_id, stage_id) REFERENCES pipeline_stages (workspace_id, id),
+  CONSTRAINT deals_company_fk FOREIGN KEY (workspace_id, company_id)
+    REFERENCES companies (workspace_id, id) ON DELETE SET NULL (company_id),
+  CONSTRAINT deals_primary_contact_fk FOREIGN KEY (workspace_id, primary_contact_id)
+    REFERENCES contacts (workspace_id, id) ON DELETE SET NULL (primary_contact_id)
 );
 
 -- Board / list: by stage, by owner, newest first (cursor), close-date forecast.
@@ -113,8 +129,8 @@ CREATE INDEX deals_owner_stage_idx ON deals (workspace_id, owner_id, stage_id);
 CREATE INDEX deals_created_idx ON deals (workspace_id, created_at DESC, id DESC);
 CREATE INDEX deals_close_date_idx ON deals (workspace_id, expected_close_date)
   WHERE closed_at IS NULL;
-CREATE INDEX deals_company_idx ON deals (company_id);
-CREATE INDEX deals_primary_contact_idx ON deals (primary_contact_id);
+CREATE INDEX deals_company_idx ON deals (workspace_id, company_id);
+CREATE INDEX deals_primary_contact_idx ON deals (workspace_id, primary_contact_id);
 
 ALTER TABLE deals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deals FORCE ROW LEVEL SECURITY;
@@ -132,11 +148,13 @@ GRANT SELECT, INSERT, UPDATE ON deals TO openline_app;
 CREATE TABLE deal_contacts (
   workspace_id  uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   deal_id       uuid NOT NULL,
-  -- Erasure: deleting the contact removes them from the deal.
-  contact_id    uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  contact_id    uuid NOT NULL,
   added_at      timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (deal_id, contact_id),
-  FOREIGN KEY (workspace_id, deal_id) REFERENCES deals (workspace_id, id) ON DELETE CASCADE
+  FOREIGN KEY (workspace_id, deal_id) REFERENCES deals (workspace_id, id) ON DELETE CASCADE,
+  -- Erasure: deleting the contact removes them from the deal.
+  CONSTRAINT deal_contacts_contact_fk FOREIGN KEY (workspace_id, contact_id)
+    REFERENCES contacts (workspace_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX deal_contacts_contact_idx ON deal_contacts (workspace_id, contact_id);
@@ -180,5 +198,7 @@ GRANT SELECT, INSERT ON deal_stage_history TO openline_app;
 
 -- ---------------------------------------------------------------- tasks.deal_id
 
-ALTER TABLE tasks ADD COLUMN deal_id uuid REFERENCES deals(id) ON DELETE SET NULL;
-CREATE INDEX tasks_deal_idx ON tasks (deal_id);
+ALTER TABLE tasks ADD COLUMN deal_id uuid;
+ALTER TABLE tasks ADD CONSTRAINT tasks_deal_fk FOREIGN KEY (workspace_id, deal_id)
+  REFERENCES deals (workspace_id, id) ON DELETE SET NULL (deal_id);
+CREATE INDEX tasks_deal_idx ON tasks (workspace_id, deal_id);

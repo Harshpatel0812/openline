@@ -5,8 +5,11 @@
  */
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import {
+  aiActions,
   auditLog,
   and,
+  contacts,
+  dealChecks,
   dealStageHistory,
   eq,
   mailboxes,
@@ -16,6 +19,7 @@ import {
 } from "@openline/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DB } from "../src/database/database.module";
+import { ScoutModelService } from "../src/modules/scout/scout-model.service";
 import { createTestApp, joinAs, signedUp, uniqueEmail, type Browser } from "./helpers";
 
 const missingId = "00000000-0000-4000-8000-000000000000";
@@ -36,7 +40,7 @@ describe("pipeline reality check (Sprint 6)", () => {
   let handle: DatabaseHandle;
 
   beforeAll(async () => {
-    app = await createTestApp({ AI_PROVIDER: "fake" });
+    app = await createTestApp({ AI_PROVIDER: "fake", REALITY_CHECKS_PER_USER_PER_HOUR: "15" });
     handle = app.get<DatabaseHandle>(DB);
   });
   afterAll(async () => {
@@ -287,5 +291,119 @@ describe("pipeline reality check (Sprint 6)", () => {
     const back = (await t.rep.get(url(t.deal.id)).expect(200)).body.check;
     expect((back.flags as Flag[]).every((f) => !f.dismissed)).toBe(true);
     expect((await t.rep.get("/v1/deals?flagged=1").expect(200)).body.items).toHaveLength(1);
+  });
+
+  // ---------------------------------------------------------------- Sprint 6 review fixes
+
+  it("25 concurrent Check now requests stay within 10 per deal per day (SEC-M1)", async () => {
+    const t = await team();
+    // A model that takes a while, so the requests really overlap.
+    const provider = app.get(ScoutModelService).provider!;
+    const complete = provider.complete.bind(provider);
+    provider.complete = async (req) => {
+      await new Promise((r) => setTimeout(r, 50));
+      return complete(req);
+    };
+    const res = await Promise.all(
+      Array.from({ length: 25 }, (_, i) => (i % 2 ? t.manager : t.rep).post(url(t.deal.id))),
+    ).finally(() => {
+      provider.complete = complete;
+    });
+    const codes = res.map((r) => r.status);
+    expect(codes.filter((c) => c === 200)).toHaveLength(10);
+    expect(codes.filter((c) => c === 429)).toHaveLength(15);
+    const rows = await withTenant(handle.db, { workspaceId: t.ws }, (tx) =>
+      tx.select().from(dealChecks).where(eq(dealChecks.dealId, t.deal.id)),
+    );
+    expect(rows).toHaveLength(10);
+    expect(rows.every((r) => r.status === "done")).toBe(true);
+  });
+
+  it("each person has an hourly Check now allowance across deals (SEC-M1)", async () => {
+    const t = await team();
+    const other = (
+      await t.rep
+        .post("/v1/deals", { name: "Second", stageId: t.stage("Qualified"), nextStep: "x" })
+        .expect(201)
+    ).body as { id: string };
+    for (let i = 0; i < 8; i++) await t.rep.post(url(t.deal.id)).expect(200);
+    for (let i = 0; i < 7; i++) await t.rep.post(url(other.id)).expect(200);
+    const res = await t.rep.post(url(other.id)).expect(429);
+    expect(res.body.code).toBe("rate_limited");
+    // Someone else still can.
+    await t.manager.post(url(other.id)).expect(200);
+  });
+
+  it("a deterministic-only run keeps the suggestion and the model flags on the board (QA-L1)", async () => {
+    const t = await team();
+    await t.rep.post(url(t.deal.id)).expect(200);
+    expect((await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body.flagCount).toBe(2);
+    await t.owner.patch("/v1/workspace/scout", { enabled: false }).expect(200);
+    const res = await t.rep.post(url(t.deal.id)).expect(200);
+    expect(res.body).toMatchObject({ deterministicOnly: true, deterministicReason: "scout_off" });
+    expect(res.body.suggestion).toMatchObject({ status: "proposed" });
+    expect((await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body.flagCount).toBe(2);
+    expect((await t.rep.get("/v1/deals?flagged=1").expect(200)).body.items).toHaveLength(1);
+    await t.rep.post(url(t.deal.id, "/suggestion/accept")).expect(200);
+  });
+
+  it("dismissed deterministic flags leave flagCount, the flagged filter and the board until new activity (QA-M1)", async () => {
+    const t = await team();
+    await t.owner.patch("/v1/workspace/scout", { enabled: false }).expect(200);
+    await t.rep.patch(`/v1/deals/${t.deal.id}`, { nextStep: null, nextStepDate: null }).expect(200);
+    const check = (await t.rep.post(url(t.deal.id)).expect(200)).body;
+    expect((check.flags as Flag[]).map((f) => f.code)).toEqual(["no_next_step"]);
+    expect((await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body.flagCount).toBe(1);
+    await t.rep
+      .post(url(t.deal.id, `/flags/${(check.flags as Flag[])[0]!.id}/dismiss`), {
+        reason: "Waiting on their board meeting",
+      })
+      .expect(200);
+    const deal = (await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body;
+    expect(deal.flagCount).toBe(0);
+    expect(deal.missingNextStep).toBe(true); // the fact stays; only the flag is dismissed
+    expect((await t.rep.get("/v1/deals?flagged=1").expect(200)).body.items).toHaveLength(0);
+    expect((await t.rep.get("/v1/deals?flagged=0").expect(200)).body.items).toHaveLength(1);
+    const board = (await t.rep.get(`/v1/deals?stageId=${t.stage("Proposal")}`).expect(200)).body;
+    expect(board.items[0].flagCount).toBe(0);
+    // New activity brings it back.
+    await t.email("Any news?", new Date(Date.now() + 1_000));
+    expect((await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body.flagCount).toBe(1);
+    expect((await t.rep.get("/v1/deals?flagged=1").expect(200)).body.items).toHaveLength(1);
+  });
+
+  it("a stale suggestion (409) is left closed as superseded (QA-M2)", async () => {
+    const t = await team();
+    await t.rep.post(url(t.deal.id)).expect(200);
+    await t.rep.post(`/v1/deals/${t.deal.id}/move`, { stageId: t.stage("Qualified") }).expect(200);
+    await t.rep.post(url(t.deal.id, "/suggestion/accept")).expect(409);
+    const rows = await withTenant(handle.db, { workspaceId: t.ws }, (tx) =>
+      tx.select().from(aiActions).where(eq(aiActions.dealId, t.deal.id)),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "rejected", inputSummary: { closedBy: "superseded" } });
+    expect((await t.rep.get(url(t.deal.id)).expect(200)).body.check.suggestion).toBeUndefined();
+    await t.rep.post(url(t.deal.id, "/suggestion/accept")).expect(404);
+  });
+
+  it("deleting a contact scrubs quotes from their emails out of stored checks (QA-M3)", async () => {
+    const t = await team();
+    const jane = (await t.rep.get(`/v1/deals/${t.deal.id}`).expect(200)).body.primaryContact as {
+      id: string;
+    };
+    const check = (await t.rep.post(url(t.deal.id)).expect(200)).body;
+    expect(check.evidence.need_confirmed.quote).toBe(NEED);
+    await t.owner.delete(`/v1/contacts/${jane.id}`).expect(200);
+    const after = (await t.manager.get(url(t.deal.id)).expect(200)).body.check;
+    expect(after.evidence.need_confirmed).toEqual({ present: "yes" });
+    const stored = await withTenant(handle.db, { workspaceId: t.ws }, (tx) =>
+      tx.select().from(dealChecks).where(eq(dealChecks.dealId, t.deal.id)),
+    );
+    expect(JSON.stringify(stored)).not.toContain("outreach");
+    expect(JSON.stringify(stored)).not.toContain("budget yet");
+    const left = await withTenant(handle.db, { workspaceId: t.ws }, (tx) =>
+      tx.select().from(contacts).where(eq(contacts.id, jane.id)),
+    );
+    expect(left).toHaveLength(0);
   });
 });

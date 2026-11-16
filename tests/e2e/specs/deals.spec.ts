@@ -221,6 +221,17 @@ test("board filters live in the URL, and the list view sorts", async ({ page }) 
     "descending",
   );
   await expect(table.getByRole("row").nth(1)).toContainText("Big deal");
+
+  // 375 px: the board and the list scroll inside themselves; the page never scrolls sideways.
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const view of ["board", "list"]) {
+    await page.goto(`/app/deals?view=${view}`);
+    await expect(page.getByText("Big deal").first()).toBeVisible();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow, view).toBeLessThanOrEqual(0);
+  }
 });
 
 test("Settings → Pipeline: rename a stage, set criteria, and see validation", async ({ page }) => {
@@ -289,17 +300,38 @@ test("Reality Check panel: check now, evidence quotes, Not right, and accepting 
   expect(created.status).toBe(201);
   const id = created.body.id;
 
-  // Real endpoint: with no emails, only the date checks run (no AI), and they flag the overdue
+  // Real endpoints: with no emails, only the date checks run (no AI), and they flag the overdue
   // next step.
   await page.goto(`/app/deals/${id}`);
   const panel = page.getByRole("region", { name: "Reality Check" });
+  await expect(panel.getByText("Not checked yet")).toBeVisible();
   await panel.getByRole("button", { name: "Check now" }).click();
   await expect(panel.getByText(/Last checked/)).toBeVisible();
   await expect(panel.getByText("Only the date checks ran", { exact: true })).toBeVisible();
   await expect(panel.getByText(/High severity|Medium severity|Low severity/).first()).toBeVisible();
+  const real = await api<{ check: { flags: { code: string; message: string }[] } }>(
+    page,
+    "GET",
+    `/deals/${id}/reality-check`,
+  );
+  const overdue = real.body.check.flags.find((f) => f.code === "next_step_overdue");
+  expect(overdue, JSON.stringify(real.body)).toBeTruthy();
+  const flagsBefore = real.body.check.flags.length;
+  await expect(panel.getByText(`Flags (${flagsBefore})`)).toBeVisible();
 
-  // Model evidence, a dismissable flag and a suggestion (mocked: the fake model's output is
-  // deterministic but email-free here).
+  // "Not right" on a real flag: stored by the API, still hidden after a reload.
+  await panel.getByRole("button", { name: `Not right: ${overdue!.message}` }).click();
+  const realDialog = page.getByRole("dialog", { name: "Not right?" });
+  await realDialog.getByLabel("Why isn't it right?").fill("Moved to next week on a call");
+  await realDialog.getByRole("button", { name: "Hide this flag" }).click();
+  await expect(realDialog).toBeHidden();
+  await page.reload();
+  await expect(panel.getByText(`Flags (${flagsBefore - 1})`)).toBeVisible();
+  await expect(panel.getByText("Marked not right (1)")).toBeVisible();
+
+  // Model evidence with quotes and Scout's stage suggestion need inbound replies, which the e2e
+  // stack can't receive (SMTP sink only): the API's own tests cover those against the database,
+  // so here the latest check is mocked to drive the panel.
   const ranAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
   const check = {
     dealId: id,

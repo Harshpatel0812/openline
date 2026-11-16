@@ -30,7 +30,7 @@ To move a deal, drag its card to another column. On a phone or tablet, press and
 
 Above the board, the forecast strip shows the open pipeline, the weighted total, and what's expected to close this month and this quarter (by expected close date). Filter by owner (mine, everyone or one person), close date range, **Stale only** or **Flagged only**; the filters stay in the page address, so you can bookmark or share a view. Switch to **List** for a sortable table.
 
-Everyone can see every deal. Reps can change the deals they own; managers, admins and owners can change all of them.
+Everyone can see every deal. Reps can change the deals they own; managers, admins and owners can change all of them. On a deal's timeline, a rep sees emails from a teammate's mailbox only as "Email (in a teammate's mailbox)" with its direction and date — the same rule as the inbox.
 
 ## Stale deals and Today
 
@@ -46,13 +46,13 @@ On each deal's page, the **Reality Check** panel shows when the deal was last ch
 
 **Date checks run without AI**, even with Scout off or the month's Scout budget used up: Openline's own rules flag a next-step date that has passed, a deal past the first stage with no next step, a close date in the past on an open deal, and stale deals.
 
-With Scout on, Scout also reads the deal's emails from the last 90 days and looks for evidence such as a decision maker taking part, budget, a confirmed need, a timeline, a proposal sent or a verbal yes. **Evidence must be quoted from a real email**: every Yes comes with the exact words from the email and a link to it. If Scout can't quote it word for word, it doesn't count. Openline's own code — not the AI — then compares the evidence with your stages' entry criteria and flags, for example, "Stage says Proposal, evidence says Discovery".
+With Scout on, Scout also reads the deal's emails from the last 90 days and looks for evidence such as a decision maker taking part, budget, a confirmed need, a timeline, a proposal sent or a verbal yes. **Evidence must be quoted from a real email**: every Yes or No comes with the exact words from the email and a link to it. If Scout can't quote it word for word, it doesn't count. You only see quotes from mail you can read; deleting a contact removes the quotes taken from their emails. Openline's own code — not the AI — then compares the evidence with your stages' entry criteria and flags, for example, "Stage says Proposal, evidence says Discovery".
 
-Each flag shows how serious it is (high, medium or low, in words as well as colour) and, where there is one, the quote. If a flag is wrong — say you discussed the budget on a call — press **Not right** and say why. The flag stays hidden until there's new activity on the deal, and your answer helps us improve the check.
+Each flag shows how serious it is (high, medium or low, in words as well as colour) and, where there is one, the quote. If a flag is wrong — say you discussed the budget on a call — press **Not right** and say why. The flag stays hidden — and out of the board's flag count and the **Flagged only** filter — until there's new activity on the deal, and your answer helps us improve the check.
 
-When the evidence points to an earlier stage, Scout suggests **Move to <stage>?** marked "Suggested by Scout — nothing moves until you accept". The deal's owner or a manager can **Accept** (the deal moves and the change is recorded) or **Dismiss** (it stays where it is).
+When the evidence points to an earlier stage, Scout suggests **Move to <stage>?** marked "Suggested by Scout — nothing moves until you accept". The deal's owner or a manager can **Accept** (the deal moves and the change is recorded) or **Dismiss** (it stays where it is). If the deal has moved since the check, the suggestion is withdrawn; run the check again.
 
-Reality Check uses at most a quarter of your workspace's monthly Scout credits. Email text is treated as information, never as instructions, and only short quotes are kept with the check.
+Reality Check uses at most a quarter of your workspace's monthly Scout credits; each run sets aside its largest possible cost before it starts, so runs at the same time can't go over. Email text is treated as information, never as instructions, and only short quotes are kept with the check.
 `,
   },
 ];

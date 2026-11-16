@@ -2,7 +2,11 @@
 --
 -- deal_checks            one row per Reality Check run: evidence per type (present + a verbatim
 --                        quote of at most 300 characters + the message id; no other email text),
---                        flags, the evidence stage, model and tokens. Append-only for the app.
+--                        flags, the evidence stage, model and tokens. A run is inserted as
+--                        'pending' (with the credits it reserves) before the model is called, so
+--                        concurrent runs see it in the daily limit and the budget, and is then
+--                        completed once ('done' / 'failed'). Otherwise append-only for the app.
+--                        Deleting an inbound email scrubs quotes taken from it (contact erasure).
 -- deal_flag_dismissals   "Not right — we discussed this on a call": hides a flag (by its stable
 --                        id) until there is activity after the dismissal. Append-only.
 -- ai_actions             new kind deal_stage_move (the "Move to <evidence stage>" proposal) and a
@@ -10,7 +14,8 @@
 -- deals                  reality_checked_at (last run, for the daily schedule) and
 --                        reality_locked_until (worker lease).
 -- claim_due_reality_checks(batch)  the scheduler's one cross-tenant path: open deals not checked
---                        in the last 24 h with activity since their last check. Ids only.
+--                        in the last 24 h (exact hours, whatever the session time zone) with
+--                        activity since their last check. Ids only.
 
 -- ---------------------------------------------------------------- deals: schedule columns
 
@@ -43,6 +48,10 @@ CREATE TABLE deal_checks (
   deterministic_only  boolean NOT NULL DEFAULT true,
   -- scout_off | no_provider | budget | no_emails | model_error (when deterministic_only).
   deterministic_reason text CHECK (deterministic_reason ~ '^[a-z_]{1,40}$'),
+  -- pending = started (reserved credits held); done = result stored; failed = gave up.
+  status              text NOT NULL DEFAULT 'done' CHECK (status IN ('pending', 'done', 'failed')),
+  -- Worst-case credits reserved for the model step; held (counted in the budget) only while pending.
+  reserved_credits    integer NOT NULL DEFAULT 0 CHECK (reserved_credits >= 0),
   FOREIGN KEY (workspace_id, deal_id) REFERENCES deals (workspace_id, id) ON DELETE CASCADE,
   FOREIGN KEY (workspace_id, stage_id) REFERENCES pipeline_stages (workspace_id, id),
   FOREIGN KEY (workspace_id, evidence_stage_id) REFERENCES pipeline_stages (workspace_id, id)
@@ -56,8 +65,77 @@ CREATE POLICY deal_checks_read ON deal_checks FOR SELECT
   USING (workspace_id = app_workspace_id());
 CREATE POLICY deal_checks_insert ON deal_checks FOR INSERT
   WITH CHECK (workspace_id = app_workspace_id());
--- Append-only for the app: no UPDATE or DELETE (a deal's deletion cascades as the table owner).
+-- Only a pending run may be completed; a finished check is never changed by the app.
+CREATE POLICY deal_checks_complete ON deal_checks FOR UPDATE
+  USING (workspace_id = app_workspace_id() AND status = 'pending')
+  WITH CHECK (workspace_id = app_workspace_id());
+-- No DELETE (a deal's deletion cascades as the table owner).
 GRANT SELECT, INSERT ON deal_checks TO openline_app;
+GRANT UPDATE (status, reserved_credits, stage_id, model, input_tokens, output_tokens, evidence,
+              flags, evidence_stage_id, deterministic_only, deterministic_reason)
+   ON deal_checks TO openline_app;
+CREATE INDEX deal_checks_pending_idx ON deal_checks (workspace_id, ran_at)
+  WHERE status = 'pending';
+
+-- Erasure (QA-M3): deleting inbound emails (e.g. with their contact, 0006) removes the quotes
+-- taken from them from every check's evidence and flags; the yes / no stays. Runs as
+-- openline_eraser (NOLOGIN, no BYPASSRLS) whose only rights are reading and rewriting those two
+-- columns of the current workspace's checks (the caller's app.workspace_id still applies).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'openline_eraser') THEN
+    CREATE ROLE openline_eraser NOLOGIN NOBYPASSRLS;
+  END IF;
+END
+$$;
+GRANT openline_eraser TO CURRENT_USER;
+GRANT USAGE ON SCHEMA public TO openline_eraser;
+GRANT SELECT (id, workspace_id, evidence, flags), UPDATE (evidence, flags)
+   ON deal_checks TO openline_eraser;
+DROP POLICY IF EXISTS deal_checks_eraser_select ON deal_checks;
+DROP POLICY IF EXISTS deal_checks_eraser_update ON deal_checks;
+CREATE POLICY deal_checks_eraser_select ON deal_checks FOR SELECT TO openline_eraser
+  USING (workspace_id = app_workspace_id());
+CREATE POLICY deal_checks_eraser_update ON deal_checks FOR UPDATE TO openline_eraser
+  USING (workspace_id = app_workspace_id()) WITH CHECK (workspace_id = app_workspace_id());
+
+CREATE OR REPLACE FUNCTION scrub_deal_check_quotes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  WITH gone AS (
+    SELECT g.workspace_id, g.id::text AS message_id FROM gone_messages g
+     WHERE g.direction = 'inbound'
+  )
+  UPDATE deal_checks c
+     SET evidence = (SELECT coalesce(jsonb_object_agg(e.key,
+                              CASE WHEN e.value->>'messageId' IN (SELECT message_id FROM gone)
+                                   THEN e.value - 'quote' - 'messageId' ELSE e.value END), '{}'::jsonb)
+                       FROM jsonb_each(c.evidence) e),
+         flags = (SELECT coalesce(jsonb_agg(
+                           CASE WHEN f.value->>'messageId' IN (SELECT message_id FROM gone)
+                                THEN f.value - 'quote' - 'messageId' ELSE f.value END
+                           ORDER BY f.ordinality), '[]'::jsonb)
+                    FROM jsonb_array_elements(c.flags) WITH ORDINALITY f)
+   WHERE c.workspace_id IN (SELECT workspace_id FROM gone)
+     AND (EXISTS (SELECT 1 FROM jsonb_each(c.evidence) e
+                   WHERE e.value->>'messageId' IN (SELECT message_id FROM gone))
+          OR EXISTS (SELECT 1 FROM jsonb_array_elements(c.flags) f
+                      WHERE f->>'messageId' IN (SELECT message_id FROM gone)));
+  RETURN NULL;
+END
+$$;
+ALTER FUNCTION scrub_deal_check_quotes() OWNER TO openline_eraser;
+REVOKE ALL ON FUNCTION scrub_deal_check_quotes() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS messages_scrub_deal_check_quotes ON messages;
+CREATE TRIGGER messages_scrub_deal_check_quotes
+  AFTER DELETE ON messages
+  REFERENCING OLD TABLE AS gone_messages
+  FOR EACH STATEMENT EXECUTE FUNCTION scrub_deal_check_quotes();
 
 -- ---------------------------------------------------------------- deal_flag_dismissals
 
@@ -149,7 +227,7 @@ AS $$
        JOIN pipeline_stages s ON s.id = x.stage_id AND s.workspace_id = x.workspace_id
       WHERE s.kind = 'open'
         AND (x.reality_locked_until IS NULL OR x.reality_locked_until < now())
-        AND (x.reality_checked_at IS NULL OR x.reality_checked_at < now() - interval '1 day')
+        AND (x.reality_checked_at IS NULL OR x.reality_checked_at < now() - interval '24 hours')
         AND (x.reality_checked_at IS NULL
              OR x.last_activity_at > x.reality_checked_at
              OR EXISTS (SELECT 1 FROM deal_contacts dc

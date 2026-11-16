@@ -340,7 +340,7 @@ export function DealBoard({
   return (
     <div className="relative" ref={rootRef}>
       <div
-        className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-4 sm:mx-0 sm:px-0"
+        className="relative -mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-4 sm:mx-0 sm:px-0"
         role="list"
         aria-label="Pipeline stages"
       >

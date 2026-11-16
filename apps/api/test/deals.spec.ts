@@ -917,6 +917,172 @@ describe("pipeline and deals (Sprint 6)", () => {
       expect(asRep.find((i) => i.kind === "task")!.title).toBeNull();
     });
 
+    it("timeline: a rep sees only direction and date of emails in a teammate's mailbox (SEC-M2)", async () => {
+      const { b } = await signedUp(app);
+      const ws = await wsOf(b);
+      const ownerId = await userOf(b);
+      const rep = await joinAs(app, b, "rep");
+      const manager = await joinAs(app, b, "manager");
+      const repId = await userOf(rep);
+      const lee = await contact(b);
+      const id = (await deal(rep, { primaryContactId: lee.id })).id as string;
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        const box = async (userId: string) =>
+          (
+            await tx
+              .insert(mailboxes)
+              .values({
+                workspaceId: ws,
+                userId,
+                provider: "smtp",
+                email: uniqueEmail("mbox"),
+                secretSealed: "sealed",
+              })
+              .returning()
+          )[0]!.id;
+        const theirs = await box(ownerId);
+        const mine = await box(repId);
+        const at = (days: number) => new Date(Date.now() - days * DAY);
+        await tx.insert(messages).values([
+          {
+            workspaceId: ws,
+            contactId: lee.id,
+            mailboxId: theirs,
+            direction: "outbound",
+            messageIdHeader: "<t-out@openline.test>",
+            subject: "Confidential pricing for Lee",
+            status: "sent",
+            sentAt: at(3),
+          },
+          {
+            workspaceId: ws,
+            contactId: lee.id,
+            mailboxId: theirs,
+            direction: "inbound",
+            messageIdHeader: "<t-in@buyer.test>",
+            subject: "Re: Confidential pricing for Lee",
+            fromEmail: "lee@buyer.test",
+            bodyText: "Looks good.",
+            status: "received",
+            receivedAt: at(2),
+            sentAt: at(2),
+          },
+          {
+            workspaceId: ws,
+            contactId: lee.id,
+            mailboxId: mine,
+            direction: "outbound",
+            messageIdHeader: "<m-out@openline.test>",
+            subject: "My follow-up",
+            status: "sent",
+            sentAt: at(1),
+          },
+        ]);
+      });
+      type Email = { kind: string; subject: string | null; [k: string]: unknown };
+      const emails = async (who: Browser) =>
+        ((await who.get(`/v1/deals/${id}/timeline`).expect(200)).body.items as Email[]).filter(
+          (i) => i.kind === "email",
+        );
+      const asRep = await emails(rep);
+      expect(asRep.map((e) => [e.direction, e.subject, e.teammateMailbox])).toEqual([
+        ["outbound", "My follow-up", false],
+        ["inbound", null, true],
+        ["outbound", null, true],
+      ]);
+      expect(asRep[1]!.snippet).toBeNull();
+      expect(typeof asRep[1]!.at).toBe("string");
+      expect(JSON.stringify(asRep)).not.toContain("Confidential");
+      for (const who of [b, manager]) {
+        const all = await emails(who);
+        expect(all.map((e) => e.subject)).toEqual([
+          "My follow-up",
+          "Re: Confidential pricing for Lee",
+          "Confidential pricing for Lee",
+        ]);
+        expect(all.every((e) => e.teammateMailbox === false)).toBe(true);
+      }
+    });
+
+    it("linking a task to a deal needs edit rights on it; completing bumps activity only then (SEC-L2)", async () => {
+      const { b: owner } = await signedUp(app);
+      const ws = await wsOf(owner);
+      const rep = await joinAs(app, owner, "rep");
+      const rep2 = await joinAs(app, owner, "rep");
+      const manager = await joinAs(app, owner, "manager");
+      const rep2Id = await userOf(rep2);
+      const id = (await deal(rep)).id as string;
+      const old = new Date(Date.now() - 30 * DAY);
+
+      expect(
+        (await rep2.post("/v1/tasks", { title: "Poke", dealId: id }).expect(403)).body.code,
+      ).toBe("forbidden");
+      const own = (await rep2.post("/v1/tasks", { title: "Mine" }).expect(201)).body;
+      await rep2.patch(`/v1/tasks/${own.id as string}`, { dealId: id }).expect(403);
+      await rep.post("/v1/tasks", { title: "On my deal", dealId: id }).expect(201);
+
+      // A manager may link a teammate's task to the deal; that teammate completing it doesn't
+      // count as activity on a deal they can't edit.
+      const assigned = (
+        await manager
+          .post("/v1/tasks", { title: "Help out", dealId: id, ownerId: rep2Id })
+          .expect(201)
+      ).body;
+      await setActivity(ws, id, old);
+      await rep2.post(`/v1/tasks/${assigned.id as string}/complete`).expect(200);
+      const after = (await rep.get(`/v1/deals/${id}`).expect(200)).body;
+      expect(after.lastActivityAt).toBe(old.toISOString());
+
+      // The deal's owner completing a linked task still counts.
+      const mine = (await rep.post("/v1/tasks", { title: "Call", dealId: id }).expect(201)).body;
+      await rep.post(`/v1/tasks/${mine.id as string}/complete`).expect(200);
+      expect((await rep.get(`/v1/deals/${id}`).expect(200)).body.isStale).toBe(false);
+    });
+
+    it("stale uses exact 24-hour days, even across a DST change in the session time zone (QA-L2)", async () => {
+      const { b } = await signedUp(app);
+      const ws = await wsOf(b);
+      const discovery = await stageNamed(b, "Discovery");
+      // The smallest n whose n × 24 h window contains a New York DST change.
+      const offset = (d: Date) =>
+        new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          timeZoneName: "shortOffset",
+        })
+          .formatToParts(d)
+          .find((p) => p.type === "timeZoneName")!.value;
+      const now = Date.now();
+      let n = 1;
+      while (offset(new Date(now - n * DAY)) === offset(new Date(now))) n += 1;
+      expect(n).toBeLessThanOrEqual(365);
+      await handle.db.execute(
+        sql`UPDATE pipeline_stages SET stale_after_days = ${n} WHERE id = ${discovery.id}`,
+      );
+      const older = (await deal(b, { name: "Just past" })).id as string;
+      const newer = (await deal(b, { name: "Not yet" })).id as string;
+      await setActivity(ws, older, new Date(now - n * DAY - 30 * 60_000));
+      await setActivity(ws, newer, new Date(now - n * DAY + 30 * 60_000));
+      await handle.db.execute(sql`SET TIME ZONE 'America/New_York'`);
+      try {
+        const stale = (await b.get("/v1/deals?stale=1").expect(200)).body.items as {
+          id: string;
+          isStale: boolean;
+        }[];
+        expect(stale.map((d) => d.id)).toEqual([older]);
+        const fresh = (await b.get("/v1/deals?stale=0").expect(200)).body.items as {
+          id: string;
+          isStale: boolean;
+        }[];
+        expect(fresh.map((d) => [d.id, d.isStale])).toEqual([[newer, false]]);
+        const attention = (await b.get("/v1/deals/attention?mine=1").expect(200)).body.items as {
+          id: string;
+        }[];
+        expect(attention.map((d) => d.id)).toEqual([older]);
+      } finally {
+        await handle.db.execute(sql`RESET TIME ZONE`);
+      }
+    });
+
     it("inbox message carries a Create deal prefill and the contact's open deals", async () => {
       const { b } = await signedUp(app);
       const ws = await wsOf(b);

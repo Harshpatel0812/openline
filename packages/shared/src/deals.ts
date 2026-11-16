@@ -391,7 +391,13 @@ export type DealTimelineItemDto =
       id: string;
       at: string;
       direction: "inbound" | "outbound";
-      subject: string;
+      /** null when the email is in a teammate's mailbox the caller can't read. */
+      subject: string | null;
+      /**
+       * true = in a teammate's mailbox (a rep reading someone else's mail): only direction and
+       * date are shown, as "Email (in a teammate's mailbox)". Managers and above read all.
+       */
+      teammateMailbox: boolean;
       /** Inbound only, ≤ 200 characters, plain text; null when not visible to the caller. */
       snippet: string | null;
       messageId: string;

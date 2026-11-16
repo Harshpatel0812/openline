@@ -139,6 +139,24 @@ test("(b) every link in the app shell and settings works when signed in", async 
     if (r.status() >= 400) errors.push(`${current}: ${r.status()} ${r.url()}`);
   });
 
+  // A contact, its company and a deal, so the crawl reaches the deal, contact and company pages.
+  const call = (path: string, data: object) =>
+    page.request.post(`/api/v1${path}`, { headers: { "x-openline-csrf": "1" }, data });
+  const contact = await call("/contacts", {
+    email: uniqueEmail("buyer"),
+    firstName: "Dana",
+    lastName: "Lee",
+    title: "VP Sales",
+    companyName: "Brightwell",
+  });
+  expect(contact.status(), await contact.text()).toBe(201);
+  const deal = await call("/deals", {
+    name: "Brightwell — new deal",
+    primaryContactId: ((await contact.json()) as { id: string }).id,
+  });
+  expect(deal.status(), await deal.text()).toBe(201);
+  const dealId = ((await deal.json()) as { id: string }).id;
+
   current = "/app";
   await page.goto("/app");
   await expect(page.getByRole("navigation", { name: "Main" }).first()).toBeVisible();
@@ -149,7 +167,14 @@ test("(b) every link in the app shell and settings works when signed in", async 
       if (target) start.add(target);
     }
   }
-  for (const p of ["/app", "/app/inbox", "/app/settings/team", "/app/settings/billing"]) {
+  for (const p of [
+    "/app",
+    "/app/inbox",
+    "/app/deals",
+    "/app/settings/team",
+    "/app/settings/pipeline",
+    "/app/settings/billing",
+  ]) {
     expect([...start], p).toContain(p);
   }
 
@@ -180,6 +205,11 @@ test("(b) every link in the app shell and settings works when signed in", async 
   expect(problems).toEqual([]);
   expect(errors).toEqual([]);
   expect(seen.size).toBeGreaterThan(8);
+  // The pipeline pages were reached from the shell, and the deal page from the board.
+  for (const p of ["/app/deals", `/app/deals/${dealId}`, "/app/settings/pipeline"]) {
+    expect([...seen], p).toContain(p);
+  }
+  expect([...seen].some((p) => p.startsWith("/app/contacts/"))).toBe(true);
 });
 
 /** Picks a plan on /pricing (with the billing toggle) and clicks its "Start free trial". */

@@ -17,6 +17,7 @@
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { creditsFor } from "./budget";
 import { parseModelJson } from "./json";
 import { addUsage, failedWithUsage, ZERO_USAGE, type LlmProvider, type LlmUsage } from "./provider";
 import { UNTRUSTED_DATA_RULE, wrapUntrusted } from "./untrusted";
@@ -284,8 +285,8 @@ const allUnclear = (): DealEvidence =>
 
 /**
  * Keeps only evidence code can stand behind: a known message, a verbatim quote of 8–300
- * characters from that message's text. A `yes` needs such a quote; a `no` may come without one.
- * Anything else becomes `unclear` with no quote. A next step with a date on the deal itself
+ * characters from that message's text. A `yes` or a `no` needs such a quote (a `no` without one
+ * is `unclear`, so it can't raise a flag). Anything else becomes `unclear` with no quote. A next step with a date on the deal itself
  * counts as `next_step_dated: yes`.
  */
 export function verifyDealEvidence(
@@ -317,13 +318,9 @@ export function verifyDealEvidence(
       if (ok && item.present === "unclear") out[type] = { present: "unclear" };
       continue;
     }
-    // No quote: a "yes" can't be checked, so it isn't evidence.
-    out[type] =
-      item.present === "no"
-        ? message
-          ? { present: "no", messageId: message.id }
-          : { present: "no" }
-        : { present: "unclear" };
+    // No quote: neither a "yes" nor a "no" can be checked, so it isn't evidence. A bare "no"
+    // would otherwise let an email that says "ignore the thread" raise flags (SEC-L1).
+    out[type] = { present: "unclear" };
   }
   if (
     types.has("next_step_dated") &&
@@ -334,6 +331,27 @@ export function verifyDealEvidence(
     out.next_step_dated = { present: "yes" };
   }
   return out;
+}
+
+/** Attempts extractDealEvidence() makes at most (one retry on invalid output). */
+export const REALITY_MAX_ATTEMPTS = 2;
+/** Output cap per attempt. */
+export const REALITY_MAX_OUTPUT_TOKENS = 1_200;
+
+/**
+ * The most credits one extractDealEvidence() call can spend: every attempt with a prompt of at
+ * most one token per UTF-8 byte (no tokenizer does worse) plus the full output cap. Reserved
+ * before the model call so concurrent checks can't overshoot a budget (SEC-M1).
+ */
+export function realityMaxCredits(input: ExtractDealEvidenceInput): number {
+  const types = input.evidenceTypes?.length ? input.evidenceTypes : EVIDENCE_TYPES;
+  const promptBytes =
+    Buffer.byteLength(systemPrompt(types), "utf8") +
+    Buffer.byteLength(buildRealityPrompt(input), "utf8");
+  return (
+    REALITY_MAX_ATTEMPTS *
+    creditsFor({ inputTokens: promptBytes, outputTokens: REALITY_MAX_OUTPUT_TOKENS })
+  );
 }
 
 export async function extractDealEvidence(
@@ -347,13 +365,13 @@ export async function extractDealEvidence(
   const messageIds = prepared.map((m) => m.id);
   let usage = ZERO_USAGE;
   let model = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < REALITY_MAX_ATTEMPTS; attempt++) {
     let res;
     try {
       res = await provider.complete({
         system,
         messages: [{ role: "user", content: prompt }],
-        maxTokens: 1_200,
+        maxTokens: REALITY_MAX_OUTPUT_TOKENS,
         model: "small",
         jsonSchema: JSON_SCHEMA,
       });

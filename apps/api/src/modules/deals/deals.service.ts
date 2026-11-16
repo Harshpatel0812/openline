@@ -86,13 +86,15 @@ function lastActivitySql(workspaceId: string) {
 
 /**
  * Undismissed model flags (criterion_missing, stage_ahead_of_evidence) of the deal's latest
- * Reality Check, counted only while the deal is still in the stage it was checked in. A
- * dismissal hides a flag until there is activity after it.
+ * Reality Check that had model evidence, counted only while the deal is still in the stage it was
+ * checked in. A later deterministic-only run (Scout off, budget, model error) doesn't wipe them
+ * (QA-L1). A dismissal hides a flag until there is activity after it.
  */
 function modelFlagCountSql(workspaceId: string) {
   return sql<number>`(SELECT count(*)::int
       FROM (SELECT c.flags, c.stage_id FROM deal_checks c
              WHERE c.workspace_id = ${workspaceId} AND c.deal_id = ${deals.id}
+               AND c.status = 'done' AND NOT c.deterministic_only
              ORDER BY c.ran_at DESC, c.id DESC LIMIT 1) lc,
            jsonb_array_elements(lc.flags) f
      WHERE lc.stage_id = ${deals.stageId}
@@ -103,11 +105,48 @@ function modelFlagCountSql(workspaceId: string) {
                           AND x.dismissed_at >= ${lastActivitySql(workspaceId)}))`;
 }
 
+/**
+ * The deterministic Reality Check flags ("Not right" works on them too) and the DTO field each
+ * one is. A dismissed one stays out of flagCount and the flagged filter until new activity, like
+ * the model flags (QA-M1); the facts themselves (isStale, …) are still reported.
+ */
+const DETERMINISTIC_FLAGS = {
+  stale: "isStale",
+  next_step_overdue: "nextStepOverdue",
+  close_date_passed: "closeDateOverdue",
+  no_next_step: "missingNextStep",
+} as const;
+type DeterministicFlagCode = keyof typeof DETERMINISTIC_FLAGS;
+
+/** Is the deterministic flag `code` dismissed since the deal's latest activity? */
+function dismissedSql(workspaceId: string, code: DeterministicFlagCode) {
+  return sql`EXISTS (SELECT 1 FROM deal_flag_dismissals x
+      WHERE x.workspace_id = ${workspaceId} AND x.deal_id = ${deals.id}
+        AND x.code = ${code} AND x.criterion_key IS NULL
+        AND x.dismissed_at >= ${lastActivitySql(workspaceId)})`;
+}
+
+/** Comma-separated deterministic flag codes dismissed since the latest activity. */
+function dismissedCodesSql(workspaceId: string) {
+  return sql<string>`(SELECT coalesce(string_agg(DISTINCT x.code, ','), '')
+      FROM deal_flag_dismissals x
+     WHERE x.workspace_id = ${workspaceId} AND x.deal_id = ${deals.id}
+       AND x.criterion_key IS NULL
+       AND x.code IN ('stale', 'next_step_overdue', 'close_date_passed', 'no_next_step')
+       AND x.dismissed_at >= ${lastActivitySql(workspaceId)})`;
+}
+
+/** `days` × 24 h exactly, whatever the session time zone (QA-L2; matches deal-rules isStale). */
+function exactDaysSql(days: unknown) {
+  return sql`(${days} * interval '24 hours')`;
+}
+
 function selectDeals(tx: Tx, ws: string) {
   return tx
     .select({
       d: deals,
       modelFlags: modelFlagCountSql(ws),
+      dismissedCodes: dismissedCodesSql(ws),
       createdAtIso: utcIso(sql`${deals.createdAt}`),
       lastActivityIso: utcIso(lastActivitySql(ws)),
       stage: {
@@ -172,6 +211,14 @@ function toDealDto(r: DealSelectRow, ctx: Ctx): DealDto {
     ctx.today,
   );
   const open = r.stage.kind === "open";
+  const dismissed = new Set(
+    String(r.dismissedCodes ?? "")
+      .split(",")
+      .filter(Boolean),
+  );
+  const deterministicCount = (
+    Object.entries(DETERMINISTIC_FLAGS) as [DeterministicFlagCode, keyof typeof flags][]
+  ).filter(([code, field]) => flags[field] && !dismissed.has(code)).length;
   return {
     id: d.id,
     name: d.name,
@@ -196,10 +243,7 @@ function toDealDto(r: DealSelectRow, ctx: Ctx): DealDto {
     createdAt: d.createdAt.toISOString(),
     updatedAt: d.updatedAt.toISOString(),
     ...flags,
-    flagCount:
-      [flags.isStale, flags.nextStepOverdue, flags.closeDateOverdue, flags.missingNextStep].filter(
-        Boolean,
-      ).length + (open ? Number(r.modelFlags ?? 0) : 0),
+    flagCount: deterministicCount + (open ? Number(r.modelFlags ?? 0) : 0),
     canEdit: canEdit(ctx.auth, d.ownerId),
   };
 }
@@ -300,7 +344,7 @@ export class DealsService {
   private staleSql(ctx: Ctx) {
     return sql`(${pipelineStages.kind} = 'open' AND ${pipelineStages.staleAfterDays} IS NOT NULL
       AND ${lastActivitySql(ctx.auth.workspaceId)}
-          < ${ctx.now.toISOString()}::timestamptz - make_interval(days => ${pipelineStages.staleAfterDays}))`;
+          < ${ctx.now.toISOString()}::timestamptz - ${exactDaysSql(pipelineStages.staleAfterDays)})`;
   }
 
   private nextStepOverdueSql(ctx: Ctx) {
@@ -308,16 +352,27 @@ export class DealsService {
   }
 
   /**
-   * "Flagged" = any deterministic Reality Check flag (stale, next step overdue, close date passed,
-   * no next step past the first open stage) or an undismissed model flag of the latest check.
+   * "Flagged" = any undismissed deterministic Reality Check flag (stale, next step overdue, close
+   * date passed, no next step past the first open stage) or an undismissed model flag of the
+   * latest check with evidence. Same rule as flagCount in the DTO.
    */
   private flaggedSql(ctx: Ctx) {
+    const ws = ctx.auth.workspaceId;
+    const undismissed = (code: DeterministicFlagCode, condition: ReturnType<typeof sql>) =>
+      sql`(${condition} AND NOT ${dismissedSql(ws, code)})`;
     // coalesce: NULL dates would make NOT flagged unknown (and drop the row from flagged=0).
-    return sql`coalesce((${this.staleSql(ctx)} OR ${this.nextStepOverdueSql(ctx)}
-      OR (${pipelineStages.kind} = 'open' AND ${deals.expectedCloseDate} < ${ctx.today}::date)
-      OR (${pipelineStages.kind} = 'open' AND ${pipelineStages.position} > ${ctx.firstOpenPosition}
-          AND (${deals.nextStep} IS NULL OR ${deals.nextStep} = ''))
-      OR (${pipelineStages.kind} = 'open' AND ${modelFlagCountSql(ctx.auth.workspaceId)} > 0)), false)`;
+    return sql`coalesce((${undismissed("stale", this.staleSql(ctx))}
+      OR ${undismissed("next_step_overdue", this.nextStepOverdueSql(ctx))}
+      OR ${undismissed(
+        "close_date_passed",
+        sql`(${pipelineStages.kind} = 'open' AND ${deals.expectedCloseDate} < ${ctx.today}::date)`,
+      )}
+      OR ${undismissed(
+        "no_next_step",
+        sql`(${pipelineStages.kind} = 'open' AND ${pipelineStages.position} > ${ctx.firstOpenPosition}
+          AND (${deals.nextStep} IS NULL OR ${deals.nextStep} = ''))`,
+      )}
+      OR (${pipelineStages.kind} = 'open' AND ${modelFlagCountSql(ws)} > 0)), false)`;
   }
 
   list(auth: AuthContext, query: DealQuery): Promise<DealPageDto> {
@@ -594,21 +649,26 @@ export class DealsService {
         .orderBy(desc(auditLog.at))
         .limit(100);
       const items: DealTimelineItemDto[] = [
-        ...emails.map((m): DealTimelineItemDto => ({
-          kind: "email",
-          id: `email:${m.id}`,
-          at: m.sentAt.toISOString(),
-          direction: m.direction,
-          subject: m.subject,
-          // Bodies are stored for inbound mail only. Reps see the text of their own mailboxes'
-          // mail (same rule as the inbox); everyone sees subject, direction and date.
-          snippet:
-            m.direction === "inbound" && m.bodyText && (seesAll || m.mailboxUserId === auth.userId)
-              ? snippetOf(m.bodyText).slice(0, PIPELINE_LIMITS.snippet)
-              : null,
-          messageId: m.id,
-          contactId: m.contactId,
-        })),
+        ...emails.map((m): DealTimelineItemDto => {
+          // Same rule as the inbox (SEC-M2): reps read their own mailboxes' mail; of a teammate's
+          // they see only that an email went one way or the other, and when.
+          const readable = seesAll || m.mailboxUserId === auth.userId;
+          return {
+            kind: "email",
+            id: `email:${m.id}`,
+            at: m.sentAt.toISOString(),
+            direction: m.direction,
+            subject: readable ? m.subject : null,
+            teammateMailbox: !readable,
+            // Bodies are stored for inbound mail only.
+            snippet:
+              readable && m.direction === "inbound" && m.bodyText
+                ? snippetOf(m.bodyText).slice(0, PIPELINE_LIMITS.snippet)
+                : null,
+            messageId: m.id,
+            contactId: m.contactId,
+          };
+        }),
         ...(await this.history(tx, ws, id)).map((h): DealTimelineItemDto => ({
           kind: "stage_change",
           id: `stage:${h.id}`,

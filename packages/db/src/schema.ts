@@ -612,6 +612,12 @@ export const dealChecks = pgTable("deal_checks", {
   evidenceStageId: uuid("evidence_stage_id"),
   deterministicOnly: boolean("deterministic_only").notNull().default(true),
   deterministicReason: text("deterministic_reason"),
+  /** pending = started (credits reserved, counts toward the limits); done; failed. */
+  status: text("status", { enum: ["pending", "done", "failed"] })
+    .notNull()
+    .default("done"),
+  /** Worst-case credits reserved for the model step; counted in the budget only while pending. */
+  reservedCredits: integer("reserved_credits").notNull().default(0),
 });
 
 /** Append-only. */

@@ -18,6 +18,7 @@ import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { ScoutModelService } from "../scout/scout-model.service";
 import { PromiseKeeperService } from "../promises/promise-keeper.service";
+import { RealityCheckerService } from "../deals/reality.service";
 
 export const POLL_INTERVAL_MS = 15_000;
 
@@ -39,6 +40,7 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
   readonly sequencer: Sequencer;
   readonly replySync: ReplySync;
   private started = false;
+  private readonly reality?: RealityCheckerService;
 
   constructor(
     @Inject(DB) handle: DatabaseHandle,
@@ -46,7 +48,9 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     @Optional() @Inject(REPLY_CLASSIFIER) override?: ReplyClassifier,
     @Optional() model?: ScoutModelService,
     @Optional() promises?: PromiseKeeperService,
+    @Optional() reality?: RealityCheckerService,
   ) {
+    this.reality = reality;
     const classifier =
       override ??
       (model?.provider
@@ -86,13 +90,21 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     if (!this.config.RUN_SCHEDULER) return;
     this.sequencer.start(POLL_INTERVAL_MS);
     this.replySync.start(POLL_INTERVAL_MS);
+    // Daily Reality Check of active open deals (its own loop: never blocks sending or sync).
+    this.reality?.checker.start();
     this.started = true;
     this.logger.log(
-      `Sending engine and reply sync running in-process (${this.config.outreach.mode}, replies every ${this.config.REPLY_SYNC_INTERVAL_MS} ms)`,
+      `Sending engine, reply sync and Reality Check running in-process (${this.config.outreach.mode}, replies every ${this.config.REPLY_SYNC_INTERVAL_MS} ms)`,
     );
   }
 
   async onApplicationShutdown(): Promise<void> {
-    if (this.started) await Promise.all([this.sequencer.stop(), this.replySync.stop()]);
+    if (this.started) {
+      await Promise.all([
+        this.sequencer.stop(),
+        this.replySync.stop(),
+        this.reality?.checker.stop(),
+      ]);
+    }
   }
 }

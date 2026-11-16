@@ -1,5 +1,6 @@
 /** Sprint 4 contracts (OL-E4 §1–3): reply detection settings, reply labels and the reply inbox. */
 import { z } from "zod";
+import type { DealPrefillDto } from "./deals";
 
 // ------------------------------------------------------------------ labels
 
@@ -161,6 +162,8 @@ export interface InboxMessageDto extends InboxItemDto {
   replies: { id: string; subject: string; sentAt: string; status: string }[];
   /** Link to the message in its mailbox, where we know one (Gmail). */
   openUrl: string | null;
+  /** "Create deal" prefill (contact, company, suggested name) and the contact's open deals. */
+  dealPrefill: DealPrefillDto;
 }
 
 export interface InboxPageDto {

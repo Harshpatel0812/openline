@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useState } from "react";
 import type { CompanyDto } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
@@ -81,7 +82,14 @@ export default function CompaniesPage() {
               <tbody>
                 {items.map((c) => (
                   <tr key={c.id}>
-                    <Td className="font-medium">{c.name}</Td>
+                    <Td className="font-medium">
+                      <Link
+                        href={`/app/companies/${c.id}`}
+                        className="text-indigo-700 hover:underline focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:outline-none dark:text-indigo-300"
+                      >
+                        {c.name}
+                      </Link>
+                    </Td>
                     <Td className="text-slate-600 dark:text-slate-400">{c.domain ?? "—"}</Td>
                     <Td className="text-right tabular-nums">{c.contactCount.toLocaleString()}</Td>
                     <Td className="whitespace-nowrap text-slate-600 dark:text-slate-400">

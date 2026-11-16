@@ -106,6 +106,7 @@ export const INCLUDED_FEATURES: { group: string; items: { label: string; soon?: 
       { label: "Scout drafts with citations and approval" },
       { label: "Promise Keeper" },
       { label: "Compliance Copilot" },
+      { label: "Pipeline Reality Check" },
     ],
   },
   {
@@ -113,7 +114,7 @@ export const INCLUDED_FEATURES: { group: string; items: { label: string; soon?: 
     items: [
       { label: "Roles: owner, admin, manager, rep" },
       { label: "Invites and audit log" },
-      { label: "Pipeline and deals", soon: true },
+      { label: "Pipeline and deals board" },
       { label: "HubSpot and Pipedrive sync", soon: true },
       { label: "Browser calling minutes", soon: true },
     ],

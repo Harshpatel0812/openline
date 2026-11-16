@@ -31,11 +31,12 @@ const mainNav: NavItem[] = [
   { label: "Contacts", href: "/app/contacts" },
   { label: "Companies", href: "/app/companies" },
   { label: "Sequences", href: "/app/sequences" },
-  { label: "Pipeline", soon: true },
+  { label: "Deals", href: "/app/deals" },
 ];
 
 const settingsNav: NavItem[] = [
   { label: "Workspace", href: "/app/settings/workspace" },
+  { label: "Pipeline", href: "/app/settings/pipeline" },
   { label: "Mailboxes", href: "/app/settings/mailboxes" },
   { label: "Team", href: "/app/settings/team" },
   { label: "Suppressions", href: "/app/settings/suppressions" },

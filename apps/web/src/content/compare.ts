@@ -64,6 +64,10 @@ const OPENLINE_ROWS: Omit<CompareRow, "competitor">[] = [
     label: "Mailboxes",
     openline: "Gmail and any SMTP provider; Outlook / Microsoft 365 coming soon",
   },
+  {
+    label: "Pipeline",
+    openline: "Deals board with stage totals; Reality Check flags stages your emails don't back up",
+  },
   { label: "Calling", openline: "Coming soon" },
   { label: "CRM sync (HubSpot, Pipedrive)", openline: "Coming soon" },
 ];
@@ -73,7 +77,7 @@ function rows(): CompareRow[] {
 }
 
 const youNeedItToday =
-  "You need calling, pipeline management or CRM sync today. Openline has these on the roadmap, not in the product yet.";
+  "You need calling or CRM sync today. Openline has these on the roadmap, not in the product yet.";
 const established =
   "You'd rather buy from a long-established vendor than from a young company that's still building.";
 

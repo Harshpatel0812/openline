@@ -5,6 +5,7 @@ export type HelpCategoryId =
   | "sequences"
   | "replies"
   | "scout"
+  | "pipeline"
   | "compliance"
   | "deliverability";
 

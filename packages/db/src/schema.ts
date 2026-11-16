@@ -6,6 +6,8 @@
 import {
   bigint,
   boolean,
+  char,
+  date,
   integer,
   jsonb,
   pgTable,
@@ -58,6 +60,8 @@ export const workspaces = pgTable("workspaces", {
   scoutWebResearch: boolean("scout_web_research").notNull().default(true),
   aboutUs: text("about_us"),
   valueProposition: text("value_proposition"),
+  // Pipeline (0011): default currency for new deals (ISO 4217).
+  currency: char("currency", { length: 3 }).notNull().default("USD"),
 });
 
 export const workspaceMembers = pgTable(
@@ -342,6 +346,8 @@ export const AI_ACTION_KINDS = [
   // Promise Keeper (0009).
   "promise_task",
   "pause_enrollments",
+  // Reality Check (0013): "Move to <evidence stage>".
+  "deal_stage_move",
 ] as const;
 export const AI_ACTION_STATUSES = [
   "proposed",
@@ -357,6 +363,15 @@ export interface AiProposalJson {
   citations: { claim: string; source: string }[];
   /** Promise Keeper proposals (kind promise_task, 0009; pause_enrollments is a legacy, unused value). */
   promise?: PromiseProposalJson;
+  /** Reality Check proposals (kind deal_stage_move, 0013); `body` is the reason. */
+  stageMove?: StageMoveProposalJson;
+}
+
+/** "Move to <evidence stage>" from a Reality Check run. */
+export interface StageMoveProposalJson {
+  checkId: string;
+  fromStageId: string;
+  toStageId: string;
 }
 
 /** What Promise Keeper found in one email; `body` of the proposal is the suggested task title. */
@@ -397,6 +412,8 @@ export const aiActions = pgTable("ai_actions", {
   messageId: uuid("message_id"),
   sequenceId: uuid("sequence_id"),
   stepPosition: integer("step_position"),
+  /** Reality Check stage-move proposals (0013). */
+  dealId: uuid("deal_id"),
   inputSummary: jsonb("input_summary").$type<Record<string, unknown>>().notNull().default({}),
   proposal: jsonb("proposal").$type<AiProposalJson>().notNull(),
   finalSubject: text("final_subject"),
@@ -459,9 +476,152 @@ export const tasks = pgTable("tasks", {
   completedAt: ts("completed_at"),
   suggestDoneAt: ts("suggest_done_at"),
   suggestDoneMessageId: uuid("suggest_done_message_id"),
+  /** Pipeline (0011): the deal this task is for. */
+  dealId: uuid("deal_id"),
   createdBy: uuid("created_by"),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------- Pipeline (0011)
+
+export const STAGE_KINDS = ["open", "won", "lost"] as const;
+export const DEAL_EVIDENCE_TYPES = [
+  "decision_maker_engaged",
+  "budget_discussed",
+  "need_confirmed",
+  "timeline_discussed",
+  "next_step_dated",
+  "proposal_sent",
+  "verbal_yes",
+  "none",
+] as const;
+
+export interface StageCriterionJson {
+  label: string;
+  evidence: (typeof DEAL_EVIDENCE_TYPES)[number];
+}
+
+export const pipelineStages = pgTable("pipeline_stages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  name: text("name").notNull(),
+  position: integer("position").notNull(),
+  probability: integer("probability").notNull(),
+  kind: text("kind", { enum: STAGE_KINDS }).notNull().default("open"),
+  /** null = never stale. */
+  staleAfterDays: integer("stale_after_days"),
+  entryCriteria: jsonb("entry_criteria").$type<StageCriterionJson[]>().notNull().default([]),
+  archivedAt: ts("archived_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const deals = pgTable("deals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  name: text("name").notNull(),
+  companyId: uuid("company_id"),
+  primaryContactId: uuid("primary_contact_id"),
+  ownerId: uuid("owner_id").notNull(),
+  stageId: uuid("stage_id").notNull(),
+  /** Integer minor units (cents). Read as a JS number: the column is capped below 2^53. */
+  amountMinor: bigint("amount_minor", { mode: "number" }),
+  currency: char("currency", { length: 3 }).notNull(),
+  /** YYYY-MM-DD. */
+  expectedCloseDate: date("expected_close_date", { mode: "string" }),
+  nextStep: text("next_step"),
+  nextStepDate: date("next_step_date", { mode: "string" }),
+  lostReason: text("lost_reason"),
+  stageEnteredAt: ts("stage_entered_at").notNull().defaultNow(),
+  /** The deal's own activity (created, edit, stage change, task done); email is merged at read. */
+  lastActivityAt: ts("last_activity_at").notNull().defaultNow(),
+  closedAt: ts("closed_at"),
+  /** Last Reality Check run (0013); the worker checks at most once a day. */
+  realityCheckedAt: ts("reality_checked_at"),
+  /** Worker lease for the scheduled Reality Check (claim_due_reality_checks). */
+  realityLockedUntil: ts("reality_locked_until"),
+  createdBy: uuid("created_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const dealContacts = pgTable(
+  "deal_contacts",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    dealId: uuid("deal_id").notNull(),
+    contactId: uuid("contact_id").notNull(),
+    addedAt: ts("added_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.dealId, t.contactId] })],
+);
+
+/** Append-only (the app role has no UPDATE/DELETE). */
+export const dealStageHistory = pgTable("deal_stage_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  dealId: uuid("deal_id").notNull(),
+  /** null = the deal was created in toStageId. */
+  fromStageId: uuid("from_stage_id"),
+  toStageId: uuid("to_stage_id").notNull(),
+  movedBy: uuid("moved_by"),
+  movedAt: ts("moved_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------- Reality Check (0013)
+
+export interface DealEvidenceItemJson {
+  present: "yes" | "no" | "unclear";
+  /** ≤ 300 characters, verbatim from the message (the only email text stored here). */
+  quote?: string;
+  messageId?: string;
+}
+
+export interface DealFlagJson {
+  id: string;
+  code: string;
+  severity: "high" | "medium" | "low";
+  message: string;
+  criterionKey?: string;
+  criterion?: { stageId: string; stageName: string; label: string; evidence: string };
+  quote?: string;
+  messageId?: string;
+}
+
+/** Append-only (the app role has no UPDATE/DELETE). */
+export const dealChecks = pgTable("deal_checks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  dealId: uuid("deal_id").notNull(),
+  /** The deal's stage when checked. */
+  stageId: uuid("stage_id").notNull(),
+  ranAt: ts("ran_at").notNull().defaultNow(),
+  trigger: text("trigger", { enum: ["manual", "scheduled"] })
+    .notNull()
+    .default("manual"),
+  ranBy: uuid("ran_by"),
+  model: text("model"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  evidence: jsonb("evidence").$type<Record<string, DealEvidenceItemJson>>().notNull().default({}),
+  flags: jsonb("flags").$type<DealFlagJson[]>().notNull().default([]),
+  evidenceStageId: uuid("evidence_stage_id"),
+  deterministicOnly: boolean("deterministic_only").notNull().default(true),
+  deterministicReason: text("deterministic_reason"),
+});
+
+/** Append-only. */
+export const dealFlagDismissals = pgTable("deal_flag_dismissals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  dealId: uuid("deal_id").notNull(),
+  flagId: text("flag_id").notNull(),
+  code: text("code").notNull(),
+  criterionKey: text("criterion_key"),
+  reason: text("reason").notNull(),
+  dismissedBy: uuid("dismissed_by"),
+  dismissedAt: ts("dismissed_at").notNull().defaultNow(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -484,3 +644,8 @@ export type AiActionRow = typeof aiActions.$inferSelect;
 export type AiUsageRow = typeof aiUsage.$inferSelect;
 export type WebsiteCacheRow = typeof websiteCache.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
+export type PipelineStageRow = typeof pipelineStages.$inferSelect;
+export type DealRow = typeof deals.$inferSelect;
+export type DealStageHistoryRow = typeof dealStageHistory.$inferSelect;
+export type DealCheckRow = typeof dealChecks.$inferSelect;
+export type DealFlagDismissalRow = typeof dealFlagDismissals.$inferSelect;

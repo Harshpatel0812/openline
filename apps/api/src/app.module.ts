@@ -49,6 +49,12 @@ import { PromisesController } from "./modules/promises/promises.controller";
 import { PromisesService } from "./modules/promises/promises.service";
 import { TasksController } from "./modules/tasks/tasks.controller";
 import { TasksService } from "./modules/tasks/tasks.service";
+import { DealsController, RelatedDealsController } from "./modules/deals/deals.controller";
+import { DealsService } from "./modules/deals/deals.service";
+import { RealityController } from "./modules/deals/reality.controller";
+import { RealityCheckerService, RealityService } from "./modules/deals/reality.service";
+import { PipelineController } from "./modules/pipeline/pipeline.controller";
+import { PipelineService } from "./modules/pipeline/pipeline.service";
 
 @Module({
   imports: [DatabaseModule],
@@ -72,8 +78,16 @@ import { TasksService } from "./modules/tasks/tasks.service";
     ContactController,
     TasksController,
     PromisesController,
+    PipelineController,
+    DealsController,
+    RelatedDealsController,
+    RealityController,
   ],
   providers: [
+    PipelineService,
+    DealsService,
+    RealityCheckerService,
+    RealityService,
     TasksService,
     PromisesService,
     PromiseKeeperService,

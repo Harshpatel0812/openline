@@ -14,7 +14,9 @@ export type AiActionKind =
   | "create_task"
   // Promise Keeper (OL-E6): create the promised task / hold the contact's enrollments.
   | "promise_task"
-  | "pause_enrollments";
+  | "pause_enrollments"
+  // Pipeline Reality Check (OL-E7): move a deal back to its evidence stage.
+  | "deal_stage_move";
 
 export interface AiAction {
   id: string;

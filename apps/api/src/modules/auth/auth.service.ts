@@ -5,6 +5,7 @@ import {
   asc,
   eq,
   isNull,
+  seedDefaultStages,
   sessions,
   users,
   withIdentity,
@@ -89,6 +90,7 @@ export class AuthService {
           trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 86_400_000),
         });
         await tx.insert(workspaceMembers).values({ workspaceId, userId: user!.id, role: "owner" });
+        await seedDefaultStages(tx, workspaceId);
         await this.audit.record(tx, {
           workspaceId,
           actorId: user!.id,

@@ -21,6 +21,7 @@ const toDto = (ws: typeof workspaces.$inferSelect): WorkspaceSettingsDto => ({
   name: ws.name,
   mailingAddress: ws.mailingAddress,
   defaultTimeZone: ws.defaultTimeZone,
+  currency: ws.currency,
 });
 
 @Injectable()
@@ -52,6 +53,8 @@ export class WorkspaceService {
       if (input.name !== undefined) patch.name = input.name;
       if (input.mailingAddress !== undefined) patch.mailingAddress = input.mailingAddress;
       if (input.defaultTimeZone !== undefined) patch.defaultTimeZone = input.defaultTimeZone;
+      // New deals default to it; existing deals keep their own currency.
+      if (input.currency !== undefined) patch.currency = input.currency;
       const fields = Object.keys(patch);
       if (fields.length) {
         await tx.update(workspaces).set(patch).where(eq(workspaces.id, auth.workspaceId));

@@ -34,23 +34,29 @@ import {
 import { useDebounced, useResource } from "@/lib/use-resource";
 import { useMe } from "./me-context";
 
-interface PickedContact {
+export interface PickedContact {
   id: string;
   name: string;
   email: string;
+  /** The contact's company, when known (deal dialog uses it). */
+  company?: { id: string; name: string } | null;
 }
 
 /** Search-as-you-type contact picker (radio list), optional. */
-function ContactPicker({
+export function ContactPicker({
   value,
   onChange,
   disabled,
   error,
+  legend = "Contact (optional)",
+  hint = "Link the task to a contact so it shows on their page.",
 }: {
   value: PickedContact | null;
   onChange: (c: PickedContact | null) => void;
   disabled?: boolean;
   error?: string;
+  legend?: string;
+  hint?: string;
 }) {
   const id = useId();
   const [search, setSearch] = useState("");
@@ -60,13 +66,12 @@ function ContactPicker({
     id: c.id,
     name: contactName(c),
     email: c.email,
+    company: c.company ? { id: c.company.id, name: c.company.name } : null,
   }));
 
   return (
     <fieldset aria-describedby={error ? `${id}-err` : `${id}-hint`}>
-      <legend className="text-sm font-medium text-slate-800 dark:text-slate-200">
-        Contact (optional)
-      </legend>
+      <legend className="text-sm font-medium text-slate-800 dark:text-slate-200">{legend}</legend>
       <p id={`${id}-hint`} className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
         {value ? (
           <>
@@ -81,7 +86,7 @@ function ContactPicker({
             </button>
           </>
         ) : (
-          "Link the task to a contact so it shows on their page."
+          hint
         )}
       </p>
       <label htmlFor={`${id}-search`} className="sr-only">
@@ -162,6 +167,7 @@ export function TaskDialog({
   onClose,
   task,
   fixedContact,
+  fixedDeal,
   onSaved,
 }: {
   open: boolean;
@@ -170,6 +176,8 @@ export function TaskDialog({
   task?: TaskDto | null;
   /** Create the task for this contact (contact page): no picker. */
   fixedContact?: PickedContact;
+  /** Link a new task to this deal (deal page). */
+  fixedDeal?: { id: string; name: string };
   onSaved: (t: TaskDto) => void;
 }) {
   const { me, can } = useMe();
@@ -234,6 +242,7 @@ export function TaskDialog({
           dueAt,
           notes: notes.trim() || undefined,
           contactId: contact?.id,
+          dealId: fixedDeal?.id,
           ownerId: isManager && ownerId !== me.user.id ? ownerId : undefined,
         };
     if (task && Object.keys(body).length === 0) {
@@ -361,6 +370,11 @@ export function TaskDialog({
               </Select>
             )}
           </Field>
+        ) : null}
+        {fixedDeal && !task ? (
+          <p className="text-sm text-slate-700 dark:text-slate-300">
+            Linked to the deal <strong>{fixedDeal.name}</strong>
+          </p>
         ) : null}
         {fixedContact && !task ? (
           <p className="text-sm text-slate-700 dark:text-slate-300">

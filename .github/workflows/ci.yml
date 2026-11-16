@@ -158,6 +158,28 @@ jobs:
         if: always()
         run: cat dev.log || true
 
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Format
+        run: terraform fmt -check -diff -recursive infra/terraform
+
+      - name: Validate (no AWS access needed)
+        run: |
+          for dir in infra/terraform/bootstrap infra/terraform/envs/dev infra/terraform/envs/staging infra/terraform/envs/prod; do
+            echo "== $dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+
   sast:
     name: Static security analysis (Semgrep)
     runs-on: ubuntu-latest

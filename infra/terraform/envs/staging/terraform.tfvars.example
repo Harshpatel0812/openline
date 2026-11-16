@@ -1,2 +1,2 @@
 # Copy to terraform.tfvars (git-ignored) and fill in.
-aws_region = "REPLACE_ME" # region decision pending
+aws_region = "us-east-1" # N. Virginia

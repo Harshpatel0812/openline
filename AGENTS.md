@@ -26,7 +26,7 @@ tests and docs; never holds secrets or production access.
 | Auth     | First-party email/password + server-side sessions (ADR 0003)                         |
 | Tests    | Vitest (unit + integration), Playwright (e2e), k6 (load)                             |
 | Monorepo | pnpm workspaces + Turborepo                                                          |
-| Infra    | AWS via Terraform (region not decided yet), GitHub Actions CI/CD                     |
+| Infra    | AWS us-east-1 via Terraform, GitHub Actions CI/CD (OIDC, no stored keys)             |
 
 ## Commands
 
@@ -116,7 +116,8 @@ tests/e2e, tests/load
 - **Next:** Sprint 7 — CRM sync: two-way HubSpot and Pipedrive sync (contacts, companies, deals).
 - **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
   emails real prospects. See `infra/terraform/README.md`.
-- **Open decisions:** AWS region / hosting location; company entity; Google verification for
+- **AWS:** us-east-1 (N. Virginia). One-time account setup: `docs/runbooks/aws-setup.md`.
+- **Open decisions:** company entity; Google verification for
   Gmail read access; see the "Decisions needed" section of the latest sprint review.
 
 ## Key documents

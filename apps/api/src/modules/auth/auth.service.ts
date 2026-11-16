@@ -87,6 +87,9 @@ export class AuthService {
           id: workspaceId,
           name: input.workspaceName,
           trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 86_400_000),
+          // Plan picked on /pricing, kept so the choice survives sign-up. Intent only.
+          chosenPlan: input.plan ?? null,
+          chosenBilling: input.plan ? (input.billing ?? "monthly") : null,
         });
         await tx.insert(workspaceMembers).values({ workspaceId, userId: user!.id, role: "owner" });
         await this.audit.record(tx, {
@@ -95,6 +98,9 @@ export class AuthService {
           action: "workspace.created",
           entity: "workspace",
           entityId: workspaceId,
+          ...(input.plan
+            ? { metadata: { chosenPlan: input.plan, chosenBilling: input.billing ?? "monthly" } }
+            : {}),
         });
         return {
           session: await this.sessions.create(tx, { userId: user!.id, workspaceId, ...client }),
@@ -317,6 +323,8 @@ export class AuthService {
             name: ws!.name,
             plan: ws!.plan,
             trialEndsAt: ws!.trialEndsAt.toISOString(),
+            chosenPlan: ws!.chosenPlan,
+            chosenBilling: ws!.chosenBilling,
           },
           role: auth.role,
           workspaces: memberships,

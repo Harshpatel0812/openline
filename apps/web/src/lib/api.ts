@@ -45,12 +45,30 @@ export function loginUrl(next?: string): string {
   return `/login?next=${encodeURIComponent(target)}`;
 }
 
-/** Only allow same-origin relative paths as redirect targets (no open redirects). */
+const NEXT_BASE = "http://openline.invalid";
+/** Paths a sign-in may return to: the app, and an invite being accepted. */
+const ALLOWED_NEXT = /^\/(?:app(?:[/?#]|$)|invite\/)/;
+
+/**
+ * Only allow same-origin relative paths into the app (or an invite) as redirect targets, so a
+ * crafted `?next=` can't send someone to another site (open redirect) or a `javascript:` URL.
+ * The value is normalised by the URL parser first, so `/app/../x`, `//host`, `/\host`, schemes and
+ * control characters all fall back.
+ */
 export function safeNext(next: string | null | undefined, fallback = "/app/contacts"): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return fallback;
+  // Backslashes and control characters are read as "/" or dropped by browsers: reject outright.
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point here
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return fallback;
+  let url: URL;
+  try {
+    url = new URL(next, NEXT_BASE);
+  } catch {
     return fallback;
   }
-  return next;
+  if (url.origin !== NEXT_BASE) return fallback;
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  return ALLOWED_NEXT.test(path) ? path : fallback;
 }
 
 let signingOut = false;

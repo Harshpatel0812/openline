@@ -23,6 +23,10 @@ const nextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
+  // Browsers and crawlers ask for /favicon.ico even when the page names src/app/icon.svg.
+  async rewrites() {
+    return [{ source: "/favicon.ico", destination: "/icon.svg" }];
+  },
 };
 
 export default nextConfig;

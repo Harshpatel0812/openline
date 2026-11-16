@@ -105,10 +105,22 @@ Base path `/v1` (health is `/health`). JSON only. Types and validation schemas l
 
 ## Workspace settings
 
-| Method | Path                                     | Who          | Response                                     |
-| ------ | ---------------------------------------- | ------------ | -------------------------------------------- |
-| GET    | `/v1/workspace`                          | all          | `WorkspaceSettingsDto`                       |
-| PATCH  | `/v1/workspace` `WorkspaceSettingsInput` | owner, admin | `WorkspaceSettingsDto` (time zone validated) |
+| Method | Path                                          | Who          | Response                                                                   |
+| ------ | --------------------------------------------- | ------------ | -------------------------------------------------------------------------- |
+| GET    | `/v1/workspace`                               | all          | `WorkspaceSettingsDto`                                                     |
+| PATCH  | `/v1/workspace` `WorkspaceSettingsInput`      | owner, admin | `WorkspaceSettingsDto` (time zone validated)                               |
+| PUT    | `/v1/workspace/plan-choice` `PlanChoiceInput` | owner, admin | `PlanChoiceDto`; audits `workspace.plan_choice_changed` (from/to plan ids) |
+
+### Plan choice (no billing yet)
+
+Every workspace is a 14-day trial (`plan: "trial"`, `trialEndsAt`). The plan a visitor picks on
+/pricing (`?plan=solo|team|growth|scale&billing=monthly|annual`) is kept through sign-up and
+sign-in: `SignupInput` takes optional `plan` and `billing` (billing defaults to `monthly`; billing
+without a plan is a 400) and stores them as `workspaces.chosen_plan` / `chosen_billing`;
+`MeResponse.workspace` returns `chosenPlan` / `chosenBilling` (null when none). The ids come from
+`PLAN_IDS` / `BILLING_PERIODS` in `@openline/shared`. This is intent only: nothing is charged and
+`plan` / `trialEndsAt` are never changed by it. The web app shows and changes it on
+`/app/settings/billing`.
 
 ## Mailboxes
 

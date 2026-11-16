@@ -2,15 +2,21 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
+import type { MeResponse } from "@openline/shared";
 import { AuthShell } from "@/components/app/logo";
 import { Alert, Button, Field, Input, LoadingBlock } from "@/components/ui";
+import { parsePlanParams } from "@/content/pricing";
 import { api, ApiError, safeNext } from "@/lib/api";
+import { afterSignIn, signupHref } from "@/lib/plan-flow";
 
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = safeNext(params.get("next"));
+  const choice = parsePlanParams(params);
+  // `next` is only honoured for paths inside the app (safeNext); a picked plan without a `next`
+  // still lands on the billing page with that plan preselected.
+  const next = safeNext(params.get("next"), afterSignIn(choice, "/app/contacts"));
   const notice =
     params.get("reset") === "1"
       ? "Your password was changed. Sign in with your new password."
@@ -19,6 +25,30 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Already signed in (e.g. picked a plan on /pricing in a tab with a live session)? Go straight
+  // on. The middleware never redirects /login (an expired cookie must still reach this page);
+  // only a session the API confirms is followed. A stale cookie is cleared so /signup works again.
+  // Sign-in waits for this check, so clearing a stale cookie can never race a fresh session.
+  const sessionCheck = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    let cancelled = false;
+    sessionCheck.current = api<MeResponse>("/auth/me", { redirectOn401: false }).then(
+      () => {
+        if (!cancelled) router.replace(next);
+      },
+      async (err: unknown) => {
+        if (err instanceof ApiError && err.status === 401) {
+          await api("/auth/logout", { method: "POST", redirectOn401: false }).catch(() => {
+            // Nothing to clear, or offline: the form still works.
+          });
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [next, router]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -29,6 +59,7 @@ function LoginForm() {
     }
     setSubmitting(true);
     try {
+      await sessionCheck.current;
       await api("/auth/login", {
         method: "POST",
         body: { email: email.trim(), password },
@@ -94,7 +125,7 @@ function LoginForm() {
       <p className="text-center text-sm text-slate-600 dark:text-slate-400">
         New to Openline?{" "}
         <Link
-          href="/signup"
+          href={signupHref(choice)}
           className="font-medium text-indigo-700 hover:underline dark:text-indigo-400"
         >
           Start a free trial

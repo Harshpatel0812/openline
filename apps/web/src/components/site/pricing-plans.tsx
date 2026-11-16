@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { buttonClasses, cx } from "@/components/ui";
-import { formatCount, formatPrice, PLANS, type BillingPeriod } from "@/content/pricing";
+import { formatCount, formatPrice, planQuery, PLANS, type BillingPeriod } from "@/content/pricing";
 import { CheckIcon } from "./blocks";
 
-function BillingToggle({
+export function BillingToggle({
   value,
   onChange,
 }: {
@@ -47,6 +47,13 @@ function BillingToggle({
 
 export function PricingPlans() {
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
+  // "Change plan" on sign-up links back here with ?billing=annual: keep the period they had.
+  // Read after mount so the page stays statically rendered.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("billing") === "annual") {
+      setPeriod("annual");
+    }
+  }, []);
   return (
     <div>
       <div className="flex justify-center">
@@ -92,7 +99,9 @@ export function PricingPlans() {
                   : "Billed monthly · flat price for the team"}
               </p>
               <Link
-                href="/signup"
+                href={`/signup${planQuery({ plan: plan.id, billing: period })}`}
+                aria-label={`Start free trial with the ${plan.name} plan, billed ${period === "annual" ? "annually" : "monthly"}`}
+                data-testid={`cta-${plan.id}`}
                 className={cx(
                   buttonClasses(plan.popular ? "primary" : "secondary", "md"),
                   "mt-6 w-full",

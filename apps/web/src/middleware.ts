@@ -1,13 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PLAN_IDS, type PlanId } from "@openline/shared";
 
 /**
  * Runs on every page request:
  *  1. Content-Security-Policy with a per-request nonce. Next.js reads the nonce from the request
  *     header and adds it to its own scripts, so only our scripts can run (XSS containment).
  *  2. Cheap auth pre-check for /app (the API is the real gate; this avoids flashing the shell).
- *  3. Signed-in visitors to the home page (e.g. clicking the logo) go straight into the app. Only
- *     "/" does this, never /login: with an expired cookie, /app sends you to /login, which must not
- *     send you back.
+ *  3. Signed-in visitors to the home page (e.g. clicking the logo) go straight into the app, and
+ *     to /signup (e.g. "Start free trial" on /pricing) go to the billing page with the plan they
+ *     picked (or /app without one). Never /login: with an expired cookie, /app sends you to /login,
+ *     which must not send you back. The login page itself moves a signed-in visitor on, but only
+ *     after the API confirms the session (GET /auth/me), and clears a stale cookie otherwise, so
+ *     an expired cookie can't trap anyone: /signup -> /app -> /login (stays) -> cookie cleared.
  */
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
@@ -17,6 +21,21 @@ export function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/app";
     url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  if (pathname === "/signup" && hasSession) {
+    const plan = request.nextUrl.searchParams.get("plan");
+    const billing = request.nextUrl.searchParams.get("billing");
+    const url = request.nextUrl.clone();
+    url.search = "";
+    if (plan && PLAN_IDS.includes(plan as PlanId)) {
+      url.pathname = "/app/settings/billing";
+      url.searchParams.set("plan", plan);
+      url.searchParams.set("billing", billing === "annual" ? "annual" : "monthly");
+    } else {
+      url.pathname = "/app";
+    }
     return NextResponse.redirect(url);
   }
 

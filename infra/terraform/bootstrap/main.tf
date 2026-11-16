@@ -95,7 +95,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 resource "aws_s3_bucket_policy" "state_tls_only" {
   bucket = aws_s3_bucket.state.id
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [{
       Sid       = "DenyInsecureTransport"
       Effect    = "Deny"
@@ -197,8 +197,8 @@ resource "aws_iam_role_policy" "deploy_iam_scoped" {
 
 data "aws_iam_policy_document" "bedrock_invoke" {
   statement {
-    sid       = "InvokeFoundationModels"
-    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    sid     = "InvokeFoundationModels"
+    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
     resources = [
       "arn:aws:bedrock:*::foundation-model/*",
       "arn:aws:bedrock:${var.aws_region}:${local.account_id}:inference-profile/*",

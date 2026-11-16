@@ -3,7 +3,7 @@
  * The API validates every body with these; the web app uses them for forms and types.
  */
 import { z } from "zod";
-import { ROLES } from "./constants";
+import { BILLING_PERIODS, PLAN_IDS, ROLES } from "./constants";
 
 const email = z
   .string()
@@ -20,6 +20,26 @@ export const PasswordSchema = z
 
 const personName = z.string().trim().min(1, "Required").max(100);
 
+// ------------------------------------------------------------------ plans
+
+export const PlanIdSchema = z.enum(PLAN_IDS);
+export const BillingPeriodSchema = z.enum(BILLING_PERIODS);
+
+/**
+ * The plan a team intends to move to after the trial. Billing isn't switched on yet, so this is
+ * intent only: nobody is charged, and they confirm before any payment.
+ */
+export const PlanChoiceInputSchema = z.object({
+  plan: PlanIdSchema,
+  billing: BillingPeriodSchema,
+});
+export type PlanChoiceInput = z.infer<typeof PlanChoiceInputSchema>;
+
+export interface PlanChoiceDto {
+  chosenPlan: PlanChoiceInput["plan"];
+  chosenBilling: PlanChoiceInput["billing"];
+}
+
 // ------------------------------------------------------------------ auth
 
 export const SignupInputSchema = z
@@ -28,6 +48,14 @@ export const SignupInputSchema = z
     email,
     password: PasswordSchema,
     workspaceName: z.string().trim().min(1, "Required").max(100),
+    /** Plan picked on /pricing before signing up (optional). */
+    plan: PlanIdSchema.optional(),
+    /** Billing period picked with the plan; defaults to monthly when only a plan is given. */
+    billing: BillingPeriodSchema.optional(),
+  })
+  .refine((v) => v.billing === undefined || v.plan !== undefined, {
+    message: "Pick a plan to go with the billing period",
+    path: ["billing"],
   })
   .refine((v) => !v.password.toLowerCase().includes(v.email.split("@")[0] ?? "\u0000"), {
     message: "Password must not contain your email name",
@@ -48,7 +76,15 @@ export const InvitableRoleSchema = z.enum(["admin", "manager", "rep"]);
 
 export interface MeResponse {
   user: { id: string; name: string; email: string; emailVerified: boolean };
-  workspace: { id: string; name: string; plan: string; trialEndsAt: string };
+  workspace: {
+    id: string;
+    name: string;
+    plan: string;
+    trialEndsAt: string;
+    /** Plan picked for after the trial, or null when none was picked yet. */
+    chosenPlan: z.infer<typeof PlanIdSchema> | null;
+    chosenBilling: z.infer<typeof BillingPeriodSchema> | null;
+  };
   role: z.infer<typeof RoleSchema>;
   workspaces: { id: string; name: string; role: z.infer<typeof RoleSchema> }[];
 }

@@ -58,6 +58,9 @@ export const workspaces = pgTable("workspaces", {
   scoutWebResearch: boolean("scout_web_research").notNull().default(true),
   aboutUs: text("about_us"),
   valueProposition: text("value_proposition"),
+  // Plan picked on /pricing (0012). Intent only: billing isn't switched on yet.
+  chosenPlan: text("chosen_plan", { enum: ["solo", "team", "growth", "scale"] }),
+  chosenBilling: text("chosen_billing", { enum: ["monthly", "annual"] }),
 });
 
 export const workspaceMembers = pgTable(

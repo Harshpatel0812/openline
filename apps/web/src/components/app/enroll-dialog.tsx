@@ -2,12 +2,21 @@
 
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
-import type { ContactDto, EnrollResultDto, MailboxDto, SequenceDto } from "@openline/shared";
-import { Alert, Button, Dialog, Field, LoadingBlock, Select } from "@/components/ui";
+import type {
+  ContactDto,
+  EnrollPreviewDto,
+  EnrollResultDto,
+  MailboxDto,
+  SequenceDto,
+} from "@openline/shared";
+import { Alert, Button, Dialog, Field, LoadingBlock, Select, Spinner } from "@/components/ui";
 import { api, ApiError, errorMessage } from "@/lib/api";
+import { checkSummary, DECISION_LABELS } from "@/lib/compliance";
+import { formatInZone } from "@/lib/tasks";
 import { contactName } from "@/lib/format";
 import { SKIP_REASON_LABELS } from "@/lib/labels";
 import { useResource } from "@/lib/use-resource";
+import { DecisionIcon } from "./compliance";
 import { useMe } from "./me-context";
 
 type SkipReason = EnrollResultDto["skipped"][number]["reason"];
@@ -62,6 +71,9 @@ export function EnrollDialog({
   const formId = useId();
   const contactsRef = useRef(contacts);
   contactsRef.current = contacts;
+  const [preview, setPreview] = useState<EnrollPreviewDto | null>(null);
+  const [previewError, setPreviewError] = useState<unknown>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const active = useMemo(
     () => (sequences.data ?? []).filter((s) => s.status === "active"),
@@ -93,6 +105,31 @@ export function EnrollDialog({
     }
   }, [usable, mailboxId, me.user.id]);
 
+  // Before confirming: who would be skipped or wait, and the first rule that stops them.
+  const pickedKey = picked.map((c) => c.id).join(",");
+  useEffect(() => {
+    setPreview(null);
+    setPreviewError(null);
+    if (!open || !sequenceId || !pickedKey) return;
+    const controller = new AbortController();
+    setPreviewing(true);
+    api<EnrollPreviewDto>(`/sequences/${sequenceId}/enroll/preview`, {
+      method: "POST",
+      body: { contactIds: pickedKey.split(",") },
+      signal: controller.signal,
+    })
+      .then((p) => {
+        setPreview(p);
+        setPreviewing(false);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setPreviewError(err);
+        setPreviewing(false);
+      });
+    return () => controller.abort();
+  }, [open, sequenceId, pickedKey]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
@@ -119,6 +156,7 @@ export function EnrollDialog({
   const loading = (sequences.loading && !sequences.data) || (mailboxes.loading && !mailboxes.data);
   const loadError = sequences.error ?? mailboxes.error;
   const count = picked.length;
+  const addCount = preview ? preview.counts.enrollable : count;
   const byId = new Map(picked.map((c) => [c.id, c]));
 
   let body: React.ReactNode;
@@ -128,7 +166,12 @@ export function EnrollDialog({
     for (const s of result.skipped) {
       const c = byId.get(s.contactId);
       const list = groups.get(s.reason) ?? [];
-      list.push(c ? contactName(c) : "A contact");
+      const n = c ? contactName(c) : "A contact";
+      list.push(
+        s.reason === "no_consent" && s.compliance?.check
+          ? `${n} (${s.compliance.check.detail})`
+          : n,
+      );
       groups.set(s.reason, list);
     }
     body = (
@@ -146,7 +189,7 @@ export function EnrollDialog({
               {result.skipped.length.toLocaleString()} skipped
             </h3>
             <p className="text-xs text-slate-600 dark:text-slate-400">
-              Openline skips anyone it isn&apos;t safe or legal to email.
+              Openline skips anyone its checks don&apos;t allow it to email.
             </p>
             <ul className="mt-3 space-y-3">
               {[...groups.entries()].map(([reason, names]) => (
@@ -256,9 +299,27 @@ export function EnrollDialog({
             </Select>
           )}
         </Field>
+        <section
+          aria-label="Compliance check before adding"
+          aria-live="polite"
+          aria-busy={previewing}
+        >
+          {previewing ? (
+            <p className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+              <Spinner size="sm" label="" /> Checking each contact against the rules…
+            </p>
+          ) : previewError ? (
+            <Alert tone="warning" title="Couldn't check the contacts first">
+              {errorMessage(previewError)} You can still add them: Openline checks every contact
+              again when it enrolls and before every email.
+            </Alert>
+          ) : preview ? (
+            <EnrollPreviewSummary preview={preview} byId={byId} />
+          ) : null}
+        </section>
         <p className="text-xs text-slate-600 dark:text-slate-400">
           Suppressed, unsubscribed and bounced contacts, and anyone who needs consent we don&apos;t
-          have on record, are skipped automatically.
+          have on record, are skipped automatically. This is not legal advice.
         </p>
       </form>
     );
@@ -267,8 +328,13 @@ export function EnrollDialog({
         <Button variant="secondary" onClick={onClose} disabled={submitting}>
           Cancel
         </Button>
-        <Button type="submit" form={formId} loading={submitting}>
-          Add {count.toLocaleString()} contact{count === 1 ? "" : "s"}
+        <Button
+          type="submit"
+          form={formId}
+          loading={submitting}
+          disabled={previewing || preview?.counts.enrollable === 0}
+        >
+          Add {addCount.toLocaleString()} contact{addCount === 1 ? "" : "s"}
         </Button>
       </>
     );
@@ -286,5 +352,72 @@ export function EnrollDialog({
     >
       {body}
     </Dialog>
+  );
+}
+
+/** The enroll preview: blocked and skipped contacts with their first failing rule, and waits. */
+function EnrollPreviewSummary({
+  preview,
+  byId,
+}: {
+  preview: EnrollPreviewDto;
+  byId: Map<string, ContactDto>;
+}) {
+  const nameOf = (id: string) => {
+    const c = byId.get(id);
+    return c ? contactName(c) : "A contact";
+  };
+  const skipped = preview.items.filter((i) => !i.enrollable);
+  const waiting = preview.items.filter((i) => i.enrollable && i.compliance?.decision === "not_now");
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="font-medium text-slate-900 dark:text-slate-100">
+        {preview.counts.enrollable.toLocaleString()} can be added
+        {skipped.length ? ` · ${skipped.length.toLocaleString()} won't be` : ""}
+      </p>
+      {skipped.length ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+          <h3 className="flex items-center gap-1.5 font-semibold">
+            <DecisionIcon decision="blocked" className="h-4 w-4" />
+            Won&apos;t be added ({skipped.length.toLocaleString()})
+          </h3>
+          <ul className="mt-2 space-y-1.5">
+            {skipped.slice(0, 10).map((i) => (
+              <li key={i.contactId}>
+                <span className="font-medium">{nameOf(i.contactId)}</span>
+                {" — "}
+                {i.compliance?.check
+                  ? `${i.compliance.decision === "blocked" ? DECISION_LABELS.blocked : SKIP_REASON_LABELS[i.skipReason ?? "not_found"]}. ${checkSummary(i.compliance.check)}`
+                  : (SKIP_REASON_LABELS[i.skipReason ?? "not_found"] ?? i.skipReason)}
+              </li>
+            ))}
+          </ul>
+          {skipped.length > 10 ? (
+            <p className="mt-1 text-xs">and {(skipped.length - 10).toLocaleString()} more</p>
+          ) : null}
+        </div>
+      ) : null}
+      {waiting.length ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          <h3 className="flex items-center gap-1.5 font-semibold">
+            <DecisionIcon decision="not_now" className="h-4 w-4" />
+            {DECISION_LABELS.not_now} ({waiting.length.toLocaleString()}) — added, first email waits
+          </h3>
+          <ul className="mt-2 space-y-1.5">
+            {waiting.slice(0, 10).map((i) => (
+              <li key={i.contactId}>
+                <span className="font-medium">{nameOf(i.contactId)}</span>
+                {" — "}
+                {i.compliance?.nextAllowedAt
+                  ? `from ${formatInZone(i.compliance.nextAllowedAt)} your time`
+                  : i.compliance?.check
+                    ? checkSummary(i.compliance.check)
+                    : "later"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }

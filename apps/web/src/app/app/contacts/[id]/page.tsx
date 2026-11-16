@@ -16,7 +16,10 @@ import {
   ContactMessagesCard,
   ContactSequencesCard,
 } from "@/components/app/contact-sections";
+import { CompliancePanel } from "@/components/app/compliance";
 import { useMe } from "@/components/app/me-context";
+import { PromisesPanel } from "@/components/app/promises";
+import { ContactTasksCard } from "@/components/app/task-list";
 import {
   Alert,
   Avatar,
@@ -233,6 +236,8 @@ export default function ContactDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
+          <PromisesPanel contactId={contact.id} contactLabel={name} />
+          <ContactTasksCard contactId={contact.id} contactName={name} />
           <Card>
             <CardHeader title="Details" />
             <form onSubmit={onSave} noValidate className="space-y-4 p-5">
@@ -266,6 +271,12 @@ export default function ContactDetailPage() {
         </div>
 
         <div className="space-y-6">
+          <CompliancePanel
+            // Re-check after consent or contact changes on this page.
+            key={`${contact.consentBasis}-${contact.status}-${contact.updatedAt}`}
+            contactId={contact.id}
+            contactName={name}
+          />
           <Card className="h-fit">
             <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
               <Avatar name={name} />

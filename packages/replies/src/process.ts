@@ -57,6 +57,11 @@ export interface ProcessContext {
   mailbox: Mailbox;
   classifier: ReplyClassifier;
   now: Date;
+  /**
+   * Called after a human reply (not a bounce, auto-reply, machine mail or unsubscribe) was stored
+   * and committed — Promise Keeper queues its extraction here. Must not block; errors are ignored.
+   */
+  onHumanReplyStored?: (event: { workspaceId: string; messageId: string }) => void;
 }
 
 function domainOf(email: string): string {
@@ -512,7 +517,8 @@ export async function processInbound(
           now,
         ));
 
-  return withTenant(db, { workspaceId }, async (tx) => {
+  let storedId: string | null = null;
+  const outcome = await withTenant(db, { workspaceId }, async (tx) => {
     const [stored] = await tx
       .insert(messages)
       .values({
@@ -580,6 +586,28 @@ export async function processInbound(
         enrollmentsChanged: changed,
       },
     });
-    return "stored";
+    storedId = stored.id;
+    return "stored" as const;
   });
+
+  const human =
+    !generated &&
+    !parsed.autoReply &&
+    parsed.autoSubmitted === null &&
+    !parsed.machineSender &&
+    parsed.bounce === null &&
+    !["bounce", "out_of_office", "unsubscribe"].includes(classification.label) &&
+    // List/bulk mail is a newsletter or a group mail, not a person's promise — unless it is the
+    // contact's own reply in our thread (some gateways stamp every message as bulk).
+    (!parsed.bulk ||
+      (match.kind === "thread" &&
+        parsed.from.email?.toLowerCase() === match.contactEmail.toLowerCase()));
+  if (outcome === "stored" && storedId && human && ctx.onHumanReplyStored) {
+    try {
+      ctx.onHumanReplyStored({ workspaceId, messageId: storedId });
+    } catch {
+      // Promise Keeper never affects reply sync.
+    }
+  }
+  return outcome;
 }

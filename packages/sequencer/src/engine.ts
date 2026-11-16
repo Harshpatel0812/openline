@@ -17,13 +17,14 @@
  *   suppression list · contact unsubscribed/bounced · consent where the law requires it (CASL, GDPR)
  *   · postal address present (CAN-SPAM) · contact's local business hours · mailbox daily cap ·
  *   random spacing between sends · mailbox health (auth failures pause, bounce-rate auto-pause).
+ * The compliance rules come from evaluateEmailContact() (packages/compliance); its result is stored
+ * on the reservation as `compliance_proof`.
  */
 import {
-  canSendCommercialEmail,
-  isSuppressed,
-  isWithinSendWindow,
-  jurisdictionFor,
-  nextSendWindowStart,
+  currentConsent,
+  evaluateEmailContact,
+  failed,
+  toComplianceProof,
   type SendWindow,
 } from "@openline/compliance";
 import {
@@ -312,13 +313,10 @@ export function createSequencer(options: SequencerOptions): Sequencer {
       .from(contacts)
       .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, workspaceId)));
     if (!contact) return { kind: "end", state: "stopped", reason: "contact_deleted" };
-    if (contact.status === "unsubscribed")
-      return { kind: "end", state: "unsubscribed", reason: "unsubscribed" };
-    if (contact.status === "bounced") return { kind: "end", state: "bounced", reason: "bounced" };
-    if (contact.status === "archived")
-      return { kind: "end", state: "stopped", reason: "contact_archived" };
 
-    // Suppression list: the exact email or the whole domain.
+    // Compliance: one deterministic evaluation (packages/compliance), stored as proof on the
+    // reservation below. Its checks are applied in the same order, with the same outcomes and
+    // lastDecision codes, as before the Compliance Copilot existed.
     const domain = `@${contact.email.split("@")[1] ?? ""}`;
     const hits = await tx
       .select({ value: suppressions.value, reason: suppressions.reason })
@@ -329,38 +327,48 @@ export function createSequencer(options: SequencerOptions): Sequencer {
           inArray(suppressions.value, [contact.email, domain]),
         ),
       );
-    if (isSuppressed(contact.email, new Set(hits.map((h) => h.value)))) {
+    const records = await tx
+      .select()
+      .from(consents)
+      .where(and(eq(consents.workspaceId, workspaceId), eq(consents.contactId, contact.id)));
+    const [workspace] = await tx.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    const timeZone = contact.timeZone ?? workspace?.defaultTimeZone ?? "America/New_York";
+    const evaluation = evaluateEmailContact(
+      {
+        email: contact.email,
+        country: contact.country,
+        status: contact.status,
+        timeZone,
+        // One consent fact everywhere (packages/compliance): the newest record, withdrawn or not.
+        consent: currentConsent(records),
+        suppressions: new Set(hits.map((h) => h.value)),
+        mailingAddress: workspace?.mailingAddress,
+        sendWindow: sequence.sendWindow as SendWindow,
+      },
+      t,
+    );
+
+    if (failed(evaluation, "contact_status")) {
+      if (contact.status === "unsubscribed")
+        return { kind: "end", state: "unsubscribed", reason: "unsubscribed" };
+      if (contact.status === "bounced") return { kind: "end", state: "bounced", reason: "bounced" };
+      return { kind: "end", state: "stopped", reason: "contact_archived" };
+    }
+
+    // Suppression list: the exact email or the whole domain.
+    if (failed(evaluation, "suppression")) {
       const unsub = hits.some((h) => h.reason === "unsubscribed");
       return { kind: "end", state: unsub ? "unsubscribed" : "stopped", reason: "suppressed" };
     }
 
     // Consent where the law requires it before the first email (CASL, GDPR).
-    const jurisdiction = jurisdictionFor(contact.country, contact.email);
-    if (jurisdiction === "CA" || jurisdiction === "EU") {
-      const [record] = await tx
-        .select()
-        .from(consents)
-        .where(and(eq(consents.workspaceId, workspaceId), eq(consents.contactId, contact.id)))
-        .orderBy(desc(consents.createdAt))
-        .limit(1);
-      const permission = canSendCommercialEmail(
-        jurisdiction,
-        record
-          ? {
-              basis: record.basis,
-              obtainedAt: record.obtainedAt,
-              withdrawnAt: record.withdrawnAt ?? undefined,
-            }
-          : undefined,
-        t,
-      );
-      if (!permission.allowed) {
-        return { kind: "end", state: "stopped", reason: "no_consent", error: permission.reason };
-      }
+    const noConsent = failed(evaluation, "consent_ca") ?? failed(evaluation, "basis_eu");
+    if (noConsent) {
+      return { kind: "end", state: "stopped", reason: "no_consent", error: noConsent.detail };
     }
 
-    const [workspace] = await tx.select().from(workspaces).where(eq(workspaces.id, workspaceId));
-    if (!workspace?.mailingAddress) {
+    // Sender identity (postal address): the workspace can fix this, so wait rather than stop.
+    if (failed(evaluation, "sender_identity") || !workspace?.mailingAddress) {
       return {
         kind: "defer",
         until: new Date(t.getTime() + HOUR),
@@ -385,16 +393,19 @@ export function createSequencer(options: SequencerOptions): Sequencer {
     }
 
     // The contact's business hours.
-    const timeZone = contact.timeZone ?? workspace.defaultTimeZone;
-    const window = sequence.sendWindow as SendWindow;
-    if (!isWithinSendWindow(t, timeZone, window)) {
-      const start = nextSendWindowStart(t, timeZone, window);
+    if (failed(evaluation, "send_window")) {
+      // An unknown time zone (or an empty window): an internal error, retried later (as before).
+      throw new Error("No valid send window or time zone for this contact");
+    }
+    if (evaluation.decision === "not_now" && evaluation.nextAllowedAt) {
       return {
         kind: "defer",
-        until: new Date(start.getTime() + jitter(20 * MINUTE)),
+        until: new Date(evaluation.nextAllowedAt.getTime() + jitter(20 * MINUTE)),
         reason: "outside_send_window",
       };
     }
+    // Every rule above passed, so this is the proof that the send was allowed.
+    const proof = toComplianceProof(evaluation);
 
     // Mailbox daily cap (rolling 24 hours) and spacing between sends.
     const since = new Date(t.getTime() - DAY);
@@ -481,6 +492,7 @@ export function createSequencer(options: SequencerOptions): Sequencer {
         subject,
         sentAt: t,
         status: "sending",
+        complianceProof: proof,
       })
       .onConflictDoNothing()
       .returning({ id: messages.id });

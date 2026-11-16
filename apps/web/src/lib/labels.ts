@@ -8,6 +8,7 @@ import type {
 } from "@openline/shared";
 import type { BadgeTone } from "@/components/ui";
 import { ApiError, errorMessage } from "./api";
+import { complianceRuleForDecision } from "./compliance";
 import { titleCase } from "./format";
 
 export const CONSENT_LABELS: Record<ConsentDto["basis"], string> = {
@@ -105,9 +106,25 @@ export function decisionLabel(code: string | null): string {
 export function enrollmentStatus(e: { lastDecision: string | null; lastError: string | null }): {
   label: string;
   error: string | null;
+  /** The Compliance Copilot rule behind a skip, stop or wait (same labels as the contact page). */
+  compliance?: { rule: string; detail: string | null };
 } {
   if (e.lastError && e.lastError in DECISION_LABELS) {
-    return { label: decisionLabel(e.lastError), error: null };
+    const rule = complianceRuleForDecision(e.lastError);
+    return {
+      label: decisionLabel(e.lastError),
+      error: null,
+      compliance: rule ? { rule, detail: null } : undefined,
+    };
+  }
+  const rule = complianceRuleForDecision(e.lastDecision);
+  if (rule) {
+    // Compliance stops carry the check's plain-language detail in lastError: not a failure.
+    return {
+      label: decisionLabel(e.lastDecision),
+      error: null,
+      compliance: { rule, detail: e.lastError },
+    };
   }
   return { label: decisionLabel(e.lastDecision), error: e.lastError };
 }

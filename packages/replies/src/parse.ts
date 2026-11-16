@@ -4,6 +4,7 @@
  * size. Attachments are parsed by mailparser but only DSN parts are read; nothing is stored.
  */
 import { createHash } from "node:crypto";
+import { trimQuoted as trimQuotedText } from "@openline/ai";
 import { convert } from "html-to-text";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 
@@ -79,43 +80,11 @@ function messageIds(value: string | string[] | undefined): string[] {
 }
 
 /**
- * Cuts the quoted history: everything from "On … wrote:", "-----Original Message-----", an Outlook
- * "From: … Sent:" block or a "____" divider onwards, plus trailing "> " lines. Falls back to the
- * full text when the reply would be empty (someone answered inline).
+ * Cuts the quoted history (see @openline/ai `trimQuoted`, shared with Promise Keeper's fallback so
+ * both cut an email at the same place), at most MAX_BODY_CHARS long.
  */
 export function trimQuoted(input: string): string {
-  const text = input.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
-  const markers = [
-    // "On … wrote:" and its translations; Gmail wraps long attribution lines over up to 4 lines.
-    new RegExp(
-      String.raw`^[ \t]*(?:On|Le|Am|El|Il|Op|Em|Den|Dne|W dniu)\b[^\n]{0,300}(?:\n[^\n]{0,300}){0,3}?(?:wrote|a écrit|schrieb|escribió|ha scritto|schreef|escreveu|skrev|napisał)[^\n:]{0,200}:[ \t]*$`,
-      "m",
-    ),
-    /^[ \t]*-{2,}\s*(?:Original Message|Ursprüngliche Nachricht|Originalnachricht|Mensaje original|Message d'origine|Messaggio originale|Oorspronkelijk bericht|Mensagem original)\s*-{2,}/im,
-    /^[ \t]*-{2,}\s*(?:Forwarded message|Weitergeleitete Nachricht|Mensaje reenviado|Message transféré)\s*-{2,}/im,
-    /^[ \t]*_{10,}[ \t]*$/m,
-    // Outlook header blocks: "From: … Sent: …" in English, German, Spanish, French, Italian, Dutch.
-    /^[ \t]*\*?(?:From|Von|De|Da|Van):\*?[^\n]*\n(?:[^\n]*\n){0,3}?[ \t]*\*?(?:Sent|Date|Gesendet|Datum|Enviado|Fecha|Envoyé|Inviato|Verzonden|Data):\*?\s/im,
-  ];
-  let cut = text.length;
-  for (const marker of markers) {
-    const m = marker.exec(text);
-    if (m && m.index < cut) cut = m.index;
-  }
-  const lines = text.slice(0, cut).split("\n");
-  while (
-    lines.length &&
-    (/^\s*>/.test(lines[lines.length - 1]!) || !lines[lines.length - 1]!.trim())
-  ) {
-    lines.pop();
-  }
-  const trimmed = lines
-    .join("\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  const result = trimmed || text.replace(/\n{3,}/g, "\n\n").trim();
-  return result.slice(0, MAX_BODY_CHARS);
+  return trimQuotedText(input, MAX_BODY_CHARS);
 }
 
 const STATUS = /\b([245])\.(\d{1,3})\.(\d{1,3})\b/;

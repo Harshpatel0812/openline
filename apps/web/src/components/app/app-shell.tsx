@@ -4,10 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, cx, Select, Spinner, useToast } from "@/components/ui";
-import { api, ApiError, errorMessage } from "@/lib/api";
+import { api, ApiError, errorMessage, stopAuthRedirects } from "@/lib/api";
 import { daysUntil } from "@/lib/format";
 import { INBOX_CHANGED_EVENT } from "@/lib/inbox";
-import type { InboxCountsDto } from "@openline/shared";
+import { TASKS_CHANGED_EVENT } from "@/lib/tasks";
+import type { InboxCountsDto, TaskCountsDto } from "@openline/shared";
 import { Logo } from "./logo";
 import { useMe } from "./me-context";
 
@@ -19,11 +20,14 @@ interface NavItem {
   /** Count shown next to the label (e.g. replies needing action). */
   badge?: number;
   badgeLabel?: string;
+  /** danger = red (overdue tasks); default indigo. */
+  badgeTone?: "danger";
 }
 
 const mainNav: NavItem[] = [
   { label: "Today", href: "/app", exact: true },
   { label: "Inbox", href: "/app/inbox" },
+  { label: "Tasks", href: "/app/tasks" },
   { label: "Contacts", href: "/app/contacts" },
   { label: "Companies", href: "/app/companies" },
   { label: "Sequences", href: "/app/sequences" },
@@ -71,7 +75,14 @@ function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => 
             >
               {item.label}
               {item.badge ? (
-                <span className="ml-auto rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-semibold text-white dark:bg-indigo-500">
+                <span
+                  className={cx(
+                    "ml-auto rounded-full px-2 py-0.5 text-xs font-semibold text-white",
+                    item.badgeTone === "danger"
+                      ? "bg-red-700 dark:bg-red-600"
+                      : "bg-indigo-600 dark:bg-indigo-500",
+                  )}
+                >
                   {item.badge > 99 ? "99+" : item.badge}
                   <span className="sr-only"> {item.badgeLabel}</span>
                 </span>
@@ -113,12 +124,44 @@ function useNeedsActionCount(): number | undefined {
   return count;
 }
 
+/** My overdue tasks, for the sidebar badge. Refreshes on navigation and task changes. */
+function useOverdueCount(): number | undefined {
+  const pathname = usePathname();
+  const [count, setCount] = useState<number | undefined>(undefined);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setNonce((n) => n + 1);
+    window.addEventListener(TASKS_CHANGED_EVENT, bump);
+    const timer = setInterval(bump, 300_000);
+    return () => {
+      window.removeEventListener(TASKS_CHANGED_EVENT, bump);
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api<TaskCountsDto>("/tasks/counts", { signal: controller.signal })
+      .then((c) => setCount(c.overdue))
+      .catch(() => {
+        // The badge is a hint; the tasks page shows real errors.
+      });
+    return () => controller.abort();
+  }, [pathname, nonce]);
+
+  return count;
+}
+
 function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const needsAction = useNeedsActionCount();
-  const items = mainNav.map((item) =>
+  const overdue = useOverdueCount();
+  const items = mainNav.map((item): NavItem =>
     item.href === "/app/inbox"
       ? { ...item, badge: needsAction, badgeLabel: "replies need action" }
-      : item,
+      : item.href === "/app/tasks"
+        ? { ...item, badge: overdue, badgeLabel: "overdue tasks", badgeTone: "danger" }
+        : item,
   );
   return (
     <nav aria-label="Main" className="space-y-6">
@@ -289,6 +332,7 @@ function UserMenu() {
 
   async function signOut() {
     setSigningOut(true);
+    stopAuthRedirects();
     try {
       await api("/auth/logout", { method: "POST", redirectOn401: false });
     } catch {

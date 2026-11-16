@@ -319,11 +319,30 @@ export const messages = pgTable("messages", {
   handledAt: ts("handled_at"),
   /** Machine-generated inbound mail (0008): never replied to from the inbox. */
   autoSubmitted: boolean("auto_submitted").notNull().default(false),
+  /** Compliance Copilot proof for outbound mail (0010); immutable once set; never the body. */
+  complianceProof: jsonb("compliance_proof").$type<ComplianceProofJson>(),
 });
+
+/** Mirrors `ComplianceProof` in packages/compliance (kept structural: db doesn't depend on it). */
+export interface ComplianceProofJson {
+  rulesetVersion: string;
+  channel: string;
+  decision: string;
+  nextAllowedAt?: string;
+  jurisdiction: string;
+  evaluatedAt: string;
+  checks: { rule: string; outcome: string; detail: string; citation: string; warning?: boolean }[];
+}
 
 // ---------------------------------------------------------------- Scout (0007)
 
-export const AI_ACTION_KINDS = ["draft_email", "draft_reply"] as const;
+export const AI_ACTION_KINDS = [
+  "draft_email",
+  "draft_reply",
+  // Promise Keeper (0009).
+  "promise_task",
+  "pause_enrollments",
+] as const;
 export const AI_ACTION_STATUSES = [
   "proposed",
   "approved",
@@ -336,6 +355,26 @@ export interface AiProposalJson {
   subject?: string;
   body: string;
   citations: { claim: string; source: string }[];
+  /** Promise Keeper proposals (kind promise_task, 0009; pause_enrollments is a legacy, unused value). */
+  promise?: PromiseProposalJson;
+}
+
+/** What Promise Keeper found in one email; `body` of the proposal is the suggested task title. */
+export interface PromiseProposalJson {
+  /** our_promise = the rep committed; their_request = "try me in March"; their_promise = they will. */
+  type: "our_promise" | "their_request" | "their_promise";
+  who: "us" | "them";
+  kind: string;
+  /** ≤ 160 characters, from the email. */
+  what: string;
+  whenPhrase: string | null;
+  taskKind: "follow_up" | "send_promised";
+  /** ISO time, resolved in code from whenPhrase + the message date. */
+  dueAt: string;
+  dueDateMissing: boolean;
+  confidence: number;
+  source: "model" | "rule";
+  direction: "inbound" | "outbound";
 }
 export interface AiSourceJson {
   id: string;
@@ -396,6 +435,35 @@ export const websiteCache = pgTable("website_cache", {
   fetchedAt: ts("fetched_at").notNull().defaultNow(),
 });
 
+// ---------------------------------------------------------------- Tasks (0009)
+
+export const TASK_KINDS = ["follow_up", "send_promised", "call", "other"] as const;
+export const TASK_SOURCES = ["manual", "promise"] as const;
+export const TASK_STATUSES = ["open", "done", "dismissed"] as const;
+
+export const tasks = pgTable("tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  ownerId: uuid("owner_id").notNull(),
+  contactId: uuid("contact_id"),
+  companyId: uuid("company_id"),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  dueAt: ts("due_at"),
+  dueDateMissing: boolean("due_date_missing").notNull().default(false),
+  kind: text("kind", { enum: TASK_KINDS }).notNull().default("other"),
+  source: text("source", { enum: TASK_SOURCES }).notNull().default("manual"),
+  sourceMessageId: uuid("source_message_id"),
+  aiActionId: uuid("ai_action_id"),
+  status: text("status", { enum: TASK_STATUSES }).notNull().default("open"),
+  completedAt: ts("completed_at"),
+  suggestDoneAt: ts("suggest_done_at"),
+  suggestDoneMessageId: uuid("suggest_done_message_id"),
+  createdBy: uuid("created_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
@@ -415,3 +483,4 @@ export type Message = typeof messages.$inferSelect;
 export type AiActionRow = typeof aiActions.$inferSelect;
 export type AiUsageRow = typeof aiUsage.$inferSelect;
 export type WebsiteCacheRow = typeof websiteCache.$inferSelect;
+export type TaskRow = typeof tasks.$inferSelect;

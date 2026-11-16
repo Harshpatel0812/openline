@@ -1,5 +1,5 @@
-import { HttpStatus, Inject, Injectable } from "@nestjs/common";
-import { canSendCommercialEmail, isSuppressed, jurisdictionFor } from "@openline/compliance";
+import { HttpStatus, Inject, Injectable, Optional } from "@nestjs/common";
+import { currentConsent, evaluateEmailContact, toComplianceProof } from "@openline/compliance";
 import {
   and,
   asc,
@@ -54,6 +54,8 @@ import { ApiException, notFound } from "../../common/http";
 import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
+import { PromiseKeeperService } from "../promises/promise-keeper.service";
+import { replyRefusal } from "./reply-compliance";
 import { decodeCursor, encodeCursor } from "../contacts/contacts.service";
 
 /** Managers and above see every mailbox's replies; reps only their own mailboxes'. */
@@ -135,6 +137,7 @@ export class InboxService {
     @Inject(DB) private readonly handle: DatabaseHandle,
     @Inject(CONFIG) private readonly config: AppConfig,
     private readonly audit: AuditService,
+    @Optional() private readonly promises?: PromiseKeeperService,
   ) {}
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -392,52 +395,41 @@ export class InboxService {
 
       const to = (m.fromEmail ?? contact.email).toLowerCase();
       const isContact = to === contact.email;
-      if (isContact && contact.status === "unsubscribed") {
-        throw blocked("unsubscribed", "This contact unsubscribed; you can't email them");
-      }
-      if (isContact && contact.status === "bounced") {
-        throw blocked("bounced", "Emails to this address bounce");
-      }
+      // The same deterministic rules as the sending engine (packages/compliance), minus the send
+      // window; the result is stored on the reply as proof.
       const domain = `@${to.split("@")[1] ?? ""}`;
       const hits = await tx
         .select({ value: suppressions.value })
         .from(suppressions)
         .where(and(eq(suppressions.workspaceId, ws), inArray(suppressions.value, [to, domain])));
-      if (isSuppressed(to, new Set(hits.map((h) => h.value)))) {
-        throw blocked("suppressed", "This address is on your suppression list");
-      }
-      const jurisdiction = jurisdictionFor(isContact ? contact.country : null, to);
-      if (jurisdiction === "CA" || jurisdiction === "EU") {
-        const [record] = isContact
-          ? await tx
-              .select()
-              .from(consents)
-              .where(and(eq(consents.workspaceId, ws), eq(consents.contactId, contact.id)))
-              .orderBy(desc(consents.createdAt))
-              .limit(1)
-          : [];
-        const permission = canSendCommercialEmail(
-          jurisdiction,
-          record
-            ? {
-                basis: record.basis,
-                obtainedAt: record.obtainedAt,
-                withdrawnAt: record.withdrawnAt ?? undefined,
-              }
-            : undefined,
-          new Date(),
-        );
-        if (!permission.allowed) {
-          throw blocked("no_consent", permission.reason ?? "Consent is required for this contact");
-        }
-      }
+      const records = isContact
+        ? await tx
+            .select()
+            .from(consents)
+            .where(and(eq(consents.workspaceId, ws), eq(consents.contactId, contact.id)))
+        : [];
       const [workspace] = await tx.select().from(workspaces).where(eq(workspaces.id, ws));
-      if (!workspace?.mailingAddress) {
+      const evaluation = evaluateEmailContact(
+        {
+          email: to,
+          country: isContact ? contact.country : null,
+          status: isContact ? contact.status : null,
+          timeZone: contact.timeZone ?? workspace?.defaultTimeZone ?? "UTC",
+          consent: currentConsent(records),
+          suppressions: new Set(hits.map((h) => h.value)),
+          mailingAddress: workspace?.mailingAddress,
+          context: "reply",
+        },
+        new Date(),
+      );
+      const refusal = replyRefusal(evaluation, contact.status, Boolean(workspace?.mailingAddress));
+      if (refusal || !workspace?.mailingAddress) {
         throw blocked(
-          "mailing_address_missing",
-          "Add your postal address in Workspace settings first (required in every email)",
+          refusal?.code ?? "mailing_address_missing",
+          refusal?.message ?? "Add your postal address in Workspace settings first",
         );
       }
+      const proof = toComplianceProof(evaluation);
 
       const token = createUnsubscribeToken(
         { workspaceId: ws, contactId: contact.id },
@@ -483,6 +475,7 @@ export class InboxService {
           providerThreadId: m.providerThreadId,
           replyToId: m.id,
           sentAt: new Date(),
+          complianceProof: proof,
         })
         .returning({ id: messages.id });
       return {
@@ -528,7 +521,7 @@ export class InboxService {
       );
     }
 
-    return this.scope(auth, async (tx) => {
+    const sent = await this.scope(auth, async (tx) => {
       const now = new Date();
       await tx
         .update(messages)
@@ -556,5 +549,16 @@ export class InboxService {
       });
       return this.detail(tx, auth, id);
     });
+    // Promise Keeper (OL-E6): in the background, after the send; never affects the reply.
+    try {
+      this.promises?.keeper.afterOutboundSent({
+        workspaceId: auth.workspaceId,
+        messageId: plan.reservationId,
+        text: input.body,
+      });
+    } catch {
+      // Ignored: the reply was sent.
+    }
+    return sent;
   }
 }

@@ -53,6 +53,16 @@ export function safeNext(next: string | null | undefined, fallback = "/app/conta
   return next;
 }
 
+let signingOut = false;
+
+/**
+ * Call when the user signs out: requests still in flight then get 401 and must not race the
+ * sign-out navigation with their own "/login?next=…" redirect.
+ */
+export function stopAuthRedirects() {
+  signingOut = true;
+}
+
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const params = new URLSearchParams();
@@ -101,7 +111,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     const redirect =
       options.redirectOn401 ??
       (typeof window !== "undefined" && window.location.pathname.startsWith("/app"));
-    if (response.status === 401 && redirect && typeof window !== "undefined") {
+    if (response.status === 401 && redirect && !signingOut && typeof window !== "undefined") {
       window.location.assign(loginUrl());
     }
     throw new ApiError(response.status, code, message, details);

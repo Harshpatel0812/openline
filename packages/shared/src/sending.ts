@@ -1,6 +1,7 @@
 /** Sprint 3 contracts: mailboxes, sequences, enrollments, workspace sending settings, account email flows. */
 import { z } from "zod";
 import { PasswordSchema } from "./api";
+import type { ContactComplianceSummaryDto } from "./compliance";
 
 // ------------------------------------------------------------------ account email flows
 
@@ -173,7 +174,12 @@ export const ENROLL_SKIP_REASONS = [
 
 export interface EnrollResultDto {
   enrolled: number;
-  skipped: { contactId: string; reason: (typeof ENROLL_SKIP_REASONS)[number] }[];
+  skipped: {
+    contactId: string;
+    reason: (typeof ENROLL_SKIP_REASONS)[number];
+    /** For compliance skips (suppressed, unsubscribed, bounced, no_consent): the failing rule. */
+    compliance?: ContactComplianceSummaryDto;
+  }[];
 }
 
 export const ENROLLMENT_STATES = [

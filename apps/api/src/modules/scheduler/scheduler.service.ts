@@ -17,6 +17,7 @@ import { createSequencer, type Sequencer } from "@openline/sequencer";
 import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { ScoutModelService } from "../scout/scout-model.service";
+import { PromiseKeeperService } from "../promises/promise-keeper.service";
 
 export const POLL_INTERVAL_MS = 15_000;
 
@@ -44,6 +45,7 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
     @Inject(CONFIG) private readonly config: AppConfig,
     @Optional() @Inject(REPLY_CLASSIFIER) override?: ReplyClassifier,
     @Optional() model?: ScoutModelService,
+    @Optional() promises?: PromiseKeeperService,
   ) {
     const classifier =
       override ??
@@ -73,6 +75,7 @@ export class SchedulerService implements OnModuleInit, OnApplicationShutdown {
       secretsKey: config.secretsKey,
       google: config.google,
       classifier,
+      promiseKeeper: promises?.keeper,
       allowPrivateHosts: config.allowPrivateSmtpHosts,
       intervalMs: config.REPLY_SYNC_INTERVAL_MS,
       logger,

@@ -14,7 +14,7 @@ import {
   workspaces,
 } from "./schema";
 import { withIdentity, withTenant } from "./tenant";
-import { aiActions, aiUsage, websiteCache } from "./schema";
+import { aiActions, aiUsage, tasks, websiteCache } from "./schema";
 
 /**
  * The most important test in the codebase: one workspace can never read or write
@@ -464,5 +464,121 @@ describe("reply detection (0006): sync claims, inbound messages", () => {
       expect(left.map((m) => m.direction)).toEqual(["outbound"]);
       expect(left[0]!.contactId).toBeNull();
     });
+  });
+});
+
+/** Tasks and promise proposals (0009): per workspace, closed not deleted. */
+describe("tenant isolation: tasks and promise proposals (0009)", () => {
+  let handle: DatabaseHandle;
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  let user = "";
+  const contactOf: Record<string, string> = {};
+  const taskOf: Record<string, string> = {};
+
+  beforeAll(async () => {
+    handle = createDatabase(process.env.TEST_DATABASE_URL ?? "pglite://memory");
+    await migrate(handle);
+    user = await withIdentity(handle.db, async (tx) => {
+      const [u] = await tx
+        .insert(users)
+        .values({ email: `t-${randomUUID()}@a.com`, name: "T", passwordHash: "x" })
+        .returning();
+      return u!.id;
+    });
+    for (const ws of [wsA, wsB]) {
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `lead@${ws.slice(0, 8)}.com` })
+          .returning();
+        contactOf[ws] = c!.id;
+        const [t] = await tx
+          .insert(tasks)
+          .values({ workspaceId: ws, ownerId: user, contactId: c!.id, title: "Send pricing" })
+          .returning();
+        taskOf[ws] = t!.id;
+        await tx.insert(aiActions).values({
+          workspaceId: ws,
+          userId: user,
+          kind: "promise_task",
+          contactId: c!.id,
+          proposal: { body: "Send pricing", citations: [] },
+          model: "rules",
+        });
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  it("each workspace sees only its own tasks; none without a workspace", async () => {
+    const rows = await withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.select().from(tasks));
+    expect(rows.map((r) => r.id)).toEqual([taskOf[wsA]]);
+    expect(await withIdentity(handle.db, (tx) => tx.select().from(tasks))).toHaveLength(0);
+  });
+
+  it("refuses to insert a task into another workspace and can't update its rows", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(tasks).values({ workspaceId: wsB, ownerId: user, title: "Sneaky" }),
+      ),
+    ).rejects.toThrow();
+    await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx
+        .update(tasks)
+        .set({ title: "hacked" })
+        .where(sql`id = ${taskOf[wsB]!}`),
+    );
+    const [b] = await withTenant(handle.db, { workspaceId: wsB }, (tx) => tx.select().from(tasks));
+    expect(b!.title).toBe("Send pricing");
+  });
+
+  it("the app role cannot delete tasks, and closed tasks need a completed_at", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.execute(sql`DELETE FROM tasks`)),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx
+          .update(tasks)
+          .set({ status: "done" })
+          .where(sql`id = ${taskOf[wsA]!}`),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("ai_actions accepts the promise kinds (and still the draft kinds), nothing else", async () => {
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      const kinds = (await tx.select().from(aiActions)).map((r) => r.kind);
+      expect(kinds).toEqual(["promise_task"]);
+      await tx.insert(aiActions).values({
+        workspaceId: wsA,
+        userId: user,
+        kind: "pause_enrollments",
+        proposal: { body: "Pause", citations: [] },
+        model: "rules",
+      });
+    });
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.execute(
+          sql`INSERT INTO ai_actions (workspace_id, user_id, kind, proposal, model)
+              VALUES (${wsA}, ${user}, 'send_email', '{}'::jsonb, 'm')`,
+        ),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("deleting a contact deletes the tasks about them", async () => {
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      await tx.delete(contacts).where(sql`id = ${contactOf[wsB]!}`);
+      expect(await tx.select().from(tasks)).toHaveLength(0);
+    });
+    const a = await withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.select().from(tasks));
+    expect(a).toHaveLength(1);
   });
 });

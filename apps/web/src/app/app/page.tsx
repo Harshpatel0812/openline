@@ -1,18 +1,24 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import type {
   ContactListDto,
   InboxCountsDto,
   MailboxDto,
   SequenceDto,
+  TaskCountsDto,
+  TaskDto,
   WorkspaceSettingsDto,
 } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
 import { useMe } from "@/components/app/me-context";
-import { Alert, Card, CardHeader, cx, Spinner } from "@/components/ui";
+import { PromisesPanel } from "@/components/app/promises";
+import { TaskUrgencyBadge } from "@/components/app/task-list";
+import { Alert, Button, Card, CardHeader, cx, Spinner } from "@/components/ui";
 import { errorMessage } from "@/lib/api";
 import { REPLY_LABEL_TEXT } from "@/lib/inbox";
+import { formatInZone, TASKS_CHANGED_EVENT, taskContactName, type TaskTab } from "@/lib/tasks";
 import { useResource } from "@/lib/use-resource";
 
 interface Step {
@@ -70,6 +76,159 @@ function RepliesCard() {
         )}
       </div>
     </Card>
+  );
+}
+
+/** Tasks listed on each Today card. */
+const LIST_LIMIT = 3;
+
+const TASK_CARDS: {
+  tab: TaskTab;
+  due: "overdue" | "today" | "upcoming";
+  title: string;
+  count: keyof TaskCountsDto;
+  empty: string;
+}[] = [
+  { tab: "overdue", due: "overdue", title: "Overdue", count: "overdue", empty: "Nothing overdue." },
+  {
+    tab: "today",
+    due: "today",
+    title: "Due today",
+    count: "dueToday",
+    empty: "Nothing due today.",
+  },
+  {
+    tab: "upcoming",
+    due: "upcoming",
+    title: "Next 7 days",
+    count: "upcoming",
+    empty: "Nothing in the next 7 days.",
+  },
+];
+
+function TaskSummaryCard({
+  card,
+  counts,
+}: {
+  card: (typeof TASK_CARDS)[number];
+  counts: { data: TaskCountsDto | undefined; loading: boolean; error: unknown };
+}) {
+  const list = useResource<TaskDto[]>("/tasks", { due: card.due, limit: LIST_LIMIT });
+  const reload = list.reload;
+  useEffect(() => {
+    window.addEventListener(TASKS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(TASKS_CHANGED_EVENT, reload);
+  }, [reload]);
+  // The card has one loading state: it ends as soon as either request answers, so a card whose
+  // tasks are on screen never still says "Loading…". Until the counts arrive, a short list (fewer
+  // than the 3 shown) is its own exact count; a full one shows "3+".
+  const shown = list.data?.length;
+  const n =
+    counts.data?.[card.count] ?? (shown !== undefined && shown < LIST_LIMIT ? shown : undefined);
+  const loading = !counts.data && !counts.error && !list.data && !list.error;
+  const urgent = card.tab === "overdue" && (n ?? shown ?? 0) > 0;
+  return (
+    <Card
+      className={cx(urgent && "border-red-300 dark:border-red-800")}
+      aria-labelledby={`today-${card.tab}`}
+      aria-busy={loading}
+      role="region"
+    >
+      <div className="px-5 py-4">
+        <h2
+          id={`today-${card.tab}`}
+          className="text-sm font-semibold text-slate-700 dark:text-slate-300"
+        >
+          {card.title}
+        </h2>
+        {loading ? (
+          <p className="mt-2 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <Spinner size="sm" label="" /> Loading…
+          </p>
+        ) : n !== undefined || shown !== undefined ? (
+          <p
+            className={cx(
+              "mt-1 text-3xl font-semibold",
+              urgent ? "text-red-700 dark:text-red-400" : "text-slate-900 dark:text-white",
+            )}
+          >
+            {n ?? `${shown ?? 0}+`}
+            <span className="sr-only"> tasks</span>
+          </p>
+        ) : counts.error ? (
+          <p className="mt-2 text-sm text-red-700 dark:text-red-400">
+            {errorMessage(counts.error)}
+          </p>
+        ) : null}
+        {loading ? null : list.data && list.data.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {list.data.map((t) => (
+              <li key={t.id} className="text-sm">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium break-words text-slate-900 dark:text-slate-100">
+                    {t.title}
+                  </span>
+                  <TaskUrgencyBadge task={t} />
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  {t.dueAt ? formatInZone(t.dueAt) : "No due date"}
+                  {t.contact ? ` · ${taskContactName(t.contact)}` : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : list.data || n === 0 ? (
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{card.empty}</p>
+        ) : list.error ? (
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            Couldn&apos;t load these tasks just now.
+          </p>
+        ) : null}
+        <Link
+          href={`/app/tasks?tab=${card.tab}`}
+          className="mt-3 inline-block rounded text-sm font-medium text-indigo-700 hover:underline focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:outline-none dark:text-indigo-400"
+        >
+          See {card.title.toLowerCase()}
+          <span aria-hidden="true"> →</span>
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+function TasksToday() {
+  const counts = useResource<TaskCountsDto>("/tasks/counts");
+  const reload = counts.reload;
+  useEffect(() => {
+    window.addEventListener(TASKS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(TASKS_CHANGED_EVENT, reload);
+  }, [reload]);
+  return (
+    <section aria-labelledby="today-tasks" className="mb-6">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 id="today-tasks" className="text-lg font-semibold text-slate-900 dark:text-white">
+          Your tasks
+        </h2>
+        <Link
+          href="/app/tasks"
+          className="rounded text-sm font-medium text-indigo-700 hover:underline focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:outline-none dark:text-indigo-400"
+        >
+          All tasks
+        </Link>
+      </div>
+      {counts.error ? (
+        <div className="mb-3 flex items-center gap-3">
+          <Button size="sm" variant="secondary" onClick={reload}>
+            Try again
+          </Button>
+        </div>
+      ) : null}
+      <div className="grid gap-4 sm:grid-cols-3">
+        {TASK_CARDS.map((c) => (
+          <TaskSummaryCard key={c.tab} card={c} counts={counts} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -138,9 +297,11 @@ export default function TodayPage() {
             : "Let's get your workspace ready to send safely."
         }
       />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,42rem)_minmax(0,18rem)]">
-        <div className="lg:order-2">
+      <TasksToday />
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,42rem)_minmax(0,22rem)]">
+        <div className="space-y-4 lg:order-2">
           <RepliesCard />
+          <PromisesPanel limit={3} />
         </div>
         <Card className="max-w-2xl">
           <CardHeader

@@ -341,6 +341,12 @@ export function ContactSequencesCard({ contactId }: { contactId: string }) {
                   {status.error ? (
                     <p className="text-xs text-red-700 dark:text-red-400">{status.error}</p>
                   ) : null}
+                  {status.compliance ? (
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      Compliance check: {status.compliance.rule}
+                      {status.compliance.detail ? ` — ${status.compliance.detail}` : ""}
+                    </p>
+                  ) : null}
                 </div>
                 <EnrollmentActions
                   enrollment={e}

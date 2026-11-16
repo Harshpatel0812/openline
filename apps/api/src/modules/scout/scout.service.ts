@@ -60,7 +60,8 @@ export function toAiActionDto(row: AiActionRow): AiActionDto {
   const research = (row.inputSummary as { research?: Research }).research ?? "none";
   return {
     id: row.id,
-    kind: row.kind,
+    // Only drafts reach this DTO: loadAction filters to the draft kinds (promises: PromisesService).
+    kind: row.kind as AiActionDto["kind"],
     status: row.status,
     createdBy: row.userId,
     contactId: row.contactId,
@@ -426,8 +427,10 @@ export class ScoutService {
       .from(aiActions)
       .where(and(eq(aiActions.id, id), eq(aiActions.workspaceId, auth.workspaceId)))
       .limit(1);
-    // Other reps' drafts look like 404; managers+ may see them.
-    if (!row || (row.userId !== auth.userId && !MANAGERS.has(auth.role))) {
+    // Other reps' drafts look like 404; managers+ may see them. Promise proposals are decided
+    // through /v1/promises only (accepting creates a task), never approved as a draft here.
+    const isDraft = row?.kind === "draft_email" || row?.kind === "draft_reply";
+    if (!row || !isDraft || (row.userId !== auth.userId && !MANAGERS.has(auth.role))) {
       throw notFound("Scout draft");
     }
     return row;

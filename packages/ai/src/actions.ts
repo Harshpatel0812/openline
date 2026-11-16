@@ -6,7 +6,15 @@ export type AiActionStatus = "proposed" | "approved" | "rejected" | "executed" |
 
 /** Sprint 4 (Scout v1) only proposes drafts; the other kinds arrive with later Scout features. */
 export type AiActionKind =
-  "draft_email" | "draft_reply" | "send_email" | "create_segment" | "update_deal" | "create_task";
+  | "draft_email"
+  | "draft_reply"
+  | "send_email"
+  | "create_segment"
+  | "update_deal"
+  | "create_task"
+  // Promise Keeper (OL-E6): create the promised task / hold the contact's enrollments.
+  | "promise_task"
+  | "pause_enrollments";
 
 export interface AiAction {
   id: string;

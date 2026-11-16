@@ -104,8 +104,8 @@ export const INCLUDED_FEATURES: { group: string; items: { label: string; soon?: 
       { label: "Reply detection that stops sequences" },
       { label: "Reply inbox with labels" },
       { label: "Scout drafts with citations and approval" },
-      { label: "Promise Keeper", soon: true },
-      { label: "Compliance Copilot", soon: true },
+      { label: "Promise Keeper" },
+      { label: "Compliance Copilot" },
     ],
   },
   {

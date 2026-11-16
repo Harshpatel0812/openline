@@ -8,7 +8,8 @@ terraform {
     }
   }
 
-  # Remote state. Bucket and lock table are created once by hand (bootstrap) per account.
+  # Remote state in the bucket created by infra/terraform/bootstrap (S3 native locking).
+  # Pass the bucket at init: terraform init -backend-config="bucket=<TF_STATE_BUCKET>" -backend-config="region=us-east-1"
   backend "s3" {
     key          = "openline/staging/terraform.tfstate"
     encrypt      = true
@@ -17,8 +18,9 @@ terraform {
 }
 
 variable "aws_region" {
-  description = "AWS region for this environment (decision pending)."
+  description = "AWS region (N. Virginia, chosen Nov 2026)."
   type        = string
+  default     = "us-east-1"
 }
 
 variable "image_tag" {

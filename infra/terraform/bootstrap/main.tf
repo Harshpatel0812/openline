@@ -95,7 +95,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 resource "aws_s3_bucket_policy" "state_tls_only" {
   bucket = aws_s3_bucket.state.id
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{
       Sid       = "DenyInsecureTransport"
       Effect    = "Deny"
@@ -197,8 +197,8 @@ resource "aws_iam_role_policy" "deploy_iam_scoped" {
 
 data "aws_iam_policy_document" "bedrock_invoke" {
   statement {
-    sid     = "InvokeFoundationModels"
-    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    sid       = "InvokeFoundationModels"
+    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
     resources = [
       "arn:aws:bedrock:*::foundation-model/*",
       "arn:aws:bedrock:${var.aws_region}:${local.account_id}:inference-profile/*",
@@ -244,10 +244,10 @@ resource "aws_budgets_budget" "monthly" {
 output "github_variables" {
   description = "Repository variables to set in GitHub (none of these are secrets)."
   value = {
-    AWS_REGION            = var.aws_region
-    AWS_STAGING_ROLE_ARN  = aws_iam_role.deploy["staging"].arn
-    AWS_PROD_ROLE_ARN     = aws_iam_role.deploy["production"].arn
-    TF_STATE_BUCKET       = aws_s3_bucket.state.bucket
-    BEDROCK_POLICY_ARN    = aws_iam_policy.bedrock_invoke.arn
+    AWS_REGION           = var.aws_region
+    AWS_STAGING_ROLE_ARN = aws_iam_role.deploy["staging"].arn
+    AWS_PROD_ROLE_ARN    = aws_iam_role.deploy["production"].arn
+    TF_STATE_BUCKET      = aws_s3_bucket.state.bucket
+    BEDROCK_POLICY_ARN   = aws_iam_policy.bedrock_invoke.arn
   }
 }

@@ -959,7 +959,10 @@ describe("sending (Sprint 3)", () => {
         { workspaceId, contactId: c },
         config.UNSUBSCRIBE_SECRET,
       );
-      const tampered = `${token.slice(0, -2)}${token.endsWith("A") ? "B" : "A"}A`;
+      // Change one character well inside the signature (the last base64 characters carry
+      // unused bits, so editing them can leave the decoded signature unchanged).
+      const i = token.length - 10;
+      const tampered = `${token.slice(0, i)}${token[i] === "A" ? "B" : "A"}${token.slice(i + 1)}`;
       const forged = createUnsubscribeToken({ workspaceId, contactId: c }, "x".repeat(40));
       const http = () => request(app.getHttpServer());
       for (const t of [tampered, forged, "garbage"]) {

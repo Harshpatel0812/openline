@@ -8,7 +8,7 @@ import {
 } from "@openline/email";
 import { CONFIG, type AppConfig } from "../../config";
 
-export type TransactionalKind = "verify_email" | "reset_password" | "invite";
+export type TransactionalKind = "verify_email" | "reset_password" | "invite" | "crm_reconnect";
 
 interface Message {
   kind: TransactionalKind;
@@ -128,6 +128,20 @@ export class TransactionalMailService {
         `The invite works for ${validDays} days.`,
       ],
       action: { label: "Accept the invite", url },
+    });
+  }
+
+  /** OL-E8: the CRM connection needs an admin to reconnect it (sent once per incident). */
+  sendCrmReconnect(to: string, providerLabel: string, url: string): Promise<void> {
+    return this.send({
+      kind: "crm_reconnect",
+      to,
+      subject: `Reconnect ${providerLabel} to keep Openline in sync`,
+      paragraphs: [
+        "Hello,",
+        `Openline can no longer reach your ${providerLabel} account: access was revoked or expired. Sync is stopped until an admin reconnects it. Nothing was deleted on either side.`,
+      ],
+      action: { label: `Reconnect ${providerLabel}`, url },
     });
   }
 

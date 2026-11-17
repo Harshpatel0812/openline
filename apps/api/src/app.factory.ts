@@ -8,7 +8,10 @@ import { ErrorFilter } from "./common/error.filter";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export const CSRF_HEADER = "x-openline-csrf";
-const CSRF_EXEMPT = /^\/v1\/public\/(?:unsubscribe\/[^/]+|contact)$/;
+// The Pipedrive uninstall callback is server-to-server (Basic auth with our client credentials,
+// no cookies), so the CSRF header doesn't apply to it.
+const CSRF_EXEMPT =
+  /^\/v1\/(?:public\/(?:unsubscribe\/[^/]+|contact)|integrations\/crm\/pipedrive\/uninstall)$/;
 
 /**
  * Security and HTTP setup shared by main.ts and the integration tests, so tests exercise the

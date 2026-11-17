@@ -55,6 +55,9 @@ import { RealityController } from "./modules/deals/reality.controller";
 import { RealityCheckerService, RealityService } from "./modules/deals/reality.service";
 import { PipelineController } from "./modules/pipeline/pipeline.controller";
 import { PipelineService } from "./modules/pipeline/pipeline.service";
+import { CrmController } from "./modules/integrations/crm.controller";
+import { CrmSchedulerService } from "./modules/integrations/crm-scheduler.service";
+import { CrmService } from "./modules/integrations/crm.service";
 
 @Module({
   imports: [DatabaseModule],
@@ -82,8 +85,11 @@ import { PipelineService } from "./modules/pipeline/pipeline.service";
     DealsController,
     RelatedDealsController,
     RealityController,
+    CrmController,
   ],
   providers: [
+    CrmService,
+    CrmSchedulerService,
     PipelineService,
     DealsService,
     RealityCheckerService,

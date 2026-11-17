@@ -11,6 +11,7 @@ import {
 } from "@openline/shared";
 import { Alert, Badge, Button, cx, Dialog, Field, Textarea } from "@/components/ui";
 import { api, ApiError, errorMessage, fieldErrorsFrom } from "@/lib/api";
+import { crmOf } from "@/lib/crm";
 import {
   dealFlags,
   formatCalendarDate,
@@ -18,6 +19,7 @@ import {
   notifyDealsChanged,
   realityFlagged,
 } from "@/lib/deals";
+import { CrmBadge } from "./crm-badge";
 
 // ------------------------------------------------------------------ badges
 
@@ -328,6 +330,7 @@ export function DealRows({ deals, label }: { deals: DealDto[]; label: string }) 
           <div className="flex flex-wrap items-center gap-1">
             <StageKindBadge kind={d.stage.kind} />
             <DealBadges deal={d} compact />
+            <CrmBadge crm={crmOf(d)} label={d.name} />
           </div>
         </li>
       ))}

@@ -7,7 +7,7 @@ import { pageMetadata } from "@/lib/seo";
 export const metadata = pageMetadata({
   title: "Pricing",
   description:
-    "Flat pricing per team, from $39 a month. Every feature on every plan, two months free on annual billing, and a 14-day free trial with no card.",
+    "Flat pricing per team, from $39 a month. Every outreach feature on every plan, CRM sync from Team, two months free on annual billing, and a 14-day free trial with no card.",
   path: "/pricing",
 });
 
@@ -19,11 +19,11 @@ export default function PricingPage() {
           <div className="mx-auto max-w-2xl text-center">
             <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Pricing</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-balance sm:text-5xl">
-              One flat price for your team. Every feature included.
+              One flat price for your team. Every outreach feature included.
             </h1>
             <p className="mt-5 text-lg text-slate-600 dark:text-slate-300">
-              No per-seat maths, no feature tiers, no surprise overage bills. Try the Team plan free
-              for 14 days — no card needed.
+              No per-seat maths, no surprise overage bills, and CRM sync from the Team plan up. Try
+              the Team plan free for 14 days — no card needed.
             </p>
           </div>
           <div className="mt-12">

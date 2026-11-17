@@ -98,4 +98,36 @@ describe("worker config: reply sync", () => {
     ).toThrow(/fake/);
     expect(() => loadWorkerConfig({ ...base, AI_PROVIDER: "bedrock" })).toThrow(/region/i);
   });
+
+  const prodSecrets = {
+    SECRETS_KEY: Buffer.alloc(32, 1).toString("base64"),
+    UNSUBSCRIBE_SECRET: "a-real-unsubscribe-secret-value",
+  };
+
+  it("CRM sync: fakes outside deployed envs; staging only allowlisted sandbox accounts; production live", () => {
+    expect(loadWorkerConfig(base).crm.mode).toBe("fake");
+    expect(() => loadWorkerConfig({ ...base, CRM_MODE: "live" })).toThrow(/production/);
+    const staging = { ...base, ...prodSecrets, NODE_ENV: "production", APP_ENV: "staging" };
+    // No allowlist yet: sandbox fails closed (no CRM can be connected), the worker still starts.
+    expect(loadWorkerConfig(staging).crm.hubspot).toBeUndefined();
+    expect(() => loadWorkerConfig({ ...staging, CRM_MODE: "fake" })).toThrow();
+    const allowlisted = loadWorkerConfig({
+      ...staging,
+      CRM_SANDBOX_ACCOUNT_IDS: "123",
+      CRM_HUBSPOT_CLIENT_ID: "i",
+      CRM_HUBSPOT_CLIENT_SECRET: "s",
+    });
+    expect(allowlisted.crm.mode).toBe("sandbox");
+    expect(allowlisted.crm.hubspot?.apiBase).toBe("https://api.hubapi.com");
+    const prod = { ...base, ...prodSecrets, NODE_ENV: "production", APP_ENV: "production" };
+    expect(loadWorkerConfig(prod).crm.mode).toBe("live");
+    expect(() => loadWorkerConfig({ ...prod, CRM_MODE: "fake" })).toThrow();
+    expect(() =>
+      loadWorkerConfig({
+        ...prod,
+        CRM_FAKE_BASE_URL: "http://127.0.0.1:1",
+        CRM_HUBSPOT_API_BASE: "https://x",
+      }),
+    ).toThrow(/overridden/);
+  });
 });

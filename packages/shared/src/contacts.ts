@@ -1,5 +1,6 @@
 /** Contacts, companies, import and suppression contracts (Sprint 2, epic OL-E2). */
 import { z } from "zod";
+import type { CrmRecordLinkDto } from "./crm";
 
 export const CONSENT_BASES = [
   "express",
@@ -89,6 +90,8 @@ export interface ContactDto {
   company: CompanyRef | null;
   createdAt: string;
   updatedAt: string;
+  /** CRM sync badge (OL-E8); absent when the workspace has no CRM connection. */
+  crm?: CrmRecordLinkDto;
 }
 
 export interface ContactListDto {
@@ -100,6 +103,8 @@ export interface ContactListDto {
 export interface CompanyDto extends CompanyRef {
   contactCount: number;
   createdAt: string;
+  /** CRM sync badge (OL-E8); absent when the workspace has no CRM connection. */
+  crm?: CrmRecordLinkDto;
 }
 
 // ------------------------------------------------------------------ CSV import
@@ -164,6 +169,16 @@ export const SuppressionCreateSchema = z.object({
     .regex(/^([^\s@]+@[^\s@]+\.[^\s@]+|@[a-z0-9.-]+\.[a-z]{2,})$/, "Use an email or @domain.com"),
   reason: z.enum(["unsubscribed", "asked_not_to_contact", "bounced", "competitor", "other"]),
 });
+
+/**
+ * Opt-outs the law requires us to honour permanently: they can't be removed, and nothing (CSV
+ * import, CRM sync) ever rewrites them. crm_unsubscribed = an opt-out pulled from a CRM (OL-E8).
+ */
+export const LOCKED_SUPPRESSION_REASONS = [
+  "unsubscribed",
+  "asked_not_to_contact",
+  "crm_unsubscribed",
+] as const;
 
 export interface SuppressionDto {
   id: string;

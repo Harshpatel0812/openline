@@ -9,6 +9,7 @@ import { sequencesAndReplies } from "./sequences-and-replies";
 import { scoutComplianceDeliverability } from "./scout-compliance-deliverability";
 import { promisesAndCopilot } from "./promises-and-copilot";
 import { dealsAndPipeline } from "./deals-and-pipeline";
+import { crmSync } from "./crm-sync";
 import type { HelpArticle, HelpCategoryId } from "./types";
 
 export type { HelpArticle, HelpCategoryId };
@@ -50,6 +51,11 @@ export const HELP_CATEGORIES: { id: HelpCategoryId; title: string; description: 
     description: "The deals board, stages, stale deals and Pipeline Reality Check.",
   },
   {
+    id: "integrations",
+    title: "Integrations",
+    description: "Two-way sync with HubSpot or Pipedrive.",
+  },
+  {
     id: "compliance",
     title: "Compliance",
     description: "CAN-SPAM, CASL, GDPR, Compliance Copilot, unsubscribes and the suppression list.",
@@ -68,6 +74,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...scoutComplianceDeliverability,
   ...promisesAndCopilot,
   ...dealsAndPipeline,
+  ...crmSync,
 ];
 
 export function getHelpArticle(slug: string): HelpArticle | undefined {

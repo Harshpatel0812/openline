@@ -40,6 +40,7 @@ const settingsNav: NavItem[] = [
   { label: "Workspace", href: "/app/settings/workspace" },
   { label: "Pipeline", href: "/app/settings/pipeline" },
   { label: "Mailboxes", href: "/app/settings/mailboxes" },
+  { label: "Integrations", href: "/app/settings/integrations" },
   { label: "Team", href: "/app/settings/team" },
   { label: "Suppressions", href: "/app/settings/suppressions" },
   { label: "Plan & billing", href: "/app/settings/billing" },

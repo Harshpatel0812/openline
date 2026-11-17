@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "@openline/ai";
+import { resolveCrmConfig, type CrmConfig } from "@openline/crm";
 import { parseSecretsKey } from "@openline/email";
 import {
   resolveAppEnv,
@@ -39,6 +40,9 @@ const EnvSchema = z.object({
   AWS_REGION: z.string().trim().max(40).optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
+  // OL-E8 CRM sync (CRM_MODE, CRM_* client ids/secrets, intervals: see packages/crm config.ts).
+  /** Sender of the one "reconnect your CRM" email to admins. */
+  MAIL_FROM: z.string().default("Openline <no-reply@openline.local>"),
 });
 
 export interface WorkerConfig {
@@ -55,6 +59,10 @@ export interface WorkerConfig {
   replyClassifyDailyCap: number;
   /** Scout's model access for reply classification ("off" = keyword fallback only). */
   ai: ProviderConfig;
+  /** CRM sync mode and endpoints (fake / sandbox / live). */
+  crm: CrmConfig;
+  smtpUrl?: string;
+  mailFrom: string;
 }
 
 /** Same provider rules as the API's resolveAiConfig. */
@@ -137,5 +145,8 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     replySyncIntervalMs: e.REPLY_SYNC_INTERVAL_MS,
     replyClassifyDailyCap: e.REPLY_CLASSIFY_DAILY_CAP,
     ai: resolveAi(e, appEnv),
+    crm: resolveCrmConfig(appEnv, env),
+    smtpUrl: e.SMTP_URL,
+    mailFrom: e.MAIL_FROM,
   };
 }

@@ -5,8 +5,10 @@ import { useParams } from "next/navigation";
 import type { CompanyDto } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
 import { DealsCard } from "@/components/app/deals-card";
+import { CrmBadge } from "@/components/app/crm-badge";
 import { Alert, Card, CardHeader, LoadingBlock } from "@/components/ui";
 import { errorMessage } from "@/lib/api";
+import { crmOf } from "@/lib/crm";
 import { formatDate } from "@/lib/format";
 import { useResource } from "@/lib/use-resource";
 
@@ -49,7 +51,17 @@ export default function CompanyPage() {
           {company.name}
         </span>
       </nav>
-      <PageHeader title={company.name} description={company.domain ?? undefined} />
+      <PageHeader
+        title={company.name}
+        description={
+          company.domain || crmOf(company) ? (
+            <span className="flex flex-wrap items-center gap-2">
+              {company.domain ? <span>{company.domain}</span> : null}
+              <CrmBadge crm={crmOf(company)} label={company.name} />
+            </span>
+          ) : undefined
+        }
+      />
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <DealsCard

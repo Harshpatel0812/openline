@@ -1,5 +1,6 @@
 /** Sprint 6 contracts (OL-E7 §1–3): pipeline stages, deals, board summary, timeline. */
 import { z } from "zod";
+import type { CrmRecordLinkDto } from "./crm";
 
 // ------------------------------------------------------------------ stages
 
@@ -317,6 +318,8 @@ export interface DealDto {
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** CRM sync badge (OL-E8); absent when the workspace has no CRM connection. */
+  crm?: CrmRecordLinkDto;
   /** Open, and now − lastActivityAt > the stage's staleAfterDays. */
   isStale: boolean;
   /** Open, and nextStepDate is before today (workspace time zone). */

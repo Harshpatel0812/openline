@@ -35,7 +35,10 @@ const OPENLINE_ROWS: Omit<CompareRow, "competitor">[] = [
     label: "Pricing model",
     openline: "Flat price per team, published: $39–$549 a month ($32–$457 billed annually)",
   },
-  { label: "Features by plan", openline: "Every feature on every plan" },
+  {
+    label: "Features by plan",
+    openline: "Every feature on every plan; HubSpot and Pipedrive sync from Team up",
+  },
   { label: "Free trial", openline: "14 days of the Team plan, no card" },
   {
     label: "Going over a limit",
@@ -69,7 +72,10 @@ const OPENLINE_ROWS: Omit<CompareRow, "competitor">[] = [
     openline: "Deals board with stage totals; Reality Check flags stages your emails don't back up",
   },
   { label: "Calling", openline: "Coming soon" },
-  { label: "CRM sync (HubSpot, Pipedrive)", openline: "Coming soon" },
+  {
+    label: "CRM sync (HubSpot, Pipedrive)",
+    openline: "Two-way contacts, companies and deals, with a preview first (Team plan and up)",
+  },
 ];
 
 function rows(): CompareRow[] {
@@ -77,7 +83,7 @@ function rows(): CompareRow[] {
 }
 
 const youNeedItToday =
-  "You need calling or CRM sync today. Openline has these on the roadmap, not in the product yet.";
+  "You need calling today. Openline has it on the roadmap, not in the product yet.";
 const established =
   "You'd rather buy from a long-established vendor than from a young company that's still building.";
 
@@ -128,7 +134,7 @@ export const COMPARISONS: Comparison[] = [
     checkedOn: null,
     sources: [{ label: "HubSpot Sales Hub pricing", url: "https://www.hubspot.com/pricing/sales" }],
     intro:
-      "HubSpot is a larger, established vendor. Openline does one job — safe, effective cold outreach for small B2B sales teams — and a HubSpot sync is on our roadmap. Here's when each makes sense.",
+      "HubSpot is a larger, established vendor. Openline does one job — safe, effective cold outreach for small B2B sales teams — and syncs both ways with HubSpot, so you can keep it as your CRM. Here's when each makes sense.",
     chooseOpenline: [
       "Your main job is cold outbound email, and you want deliverability and compliance guardrails built in.",
       "You want one flat price for the team, with every outreach feature on every plan.",

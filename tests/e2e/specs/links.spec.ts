@@ -86,7 +86,16 @@ test("(a) every public link from / works, and every #anchor exists", async ({ pa
   ).toEqual([]);
 
   // The crawl reached the parts of the site people navigate by.
-  for (const p of ["/features", "/pricing", "/help", "/blog", "/security", "/privacy", "/terms"]) {
+  for (const p of [
+    "/features",
+    "/pricing",
+    "/help",
+    "/help/crm-sync",
+    "/blog",
+    "/security",
+    "/privacy",
+    "/terms",
+  ]) {
     expect(status.get(p), p).toBe(200);
   }
   expect([...status.keys()].some((p) => p.startsWith("/help/"))).toBe(true);
@@ -174,11 +183,13 @@ test("(b) every link in the app shell and settings works when signed in", async 
     "/app/settings/team",
     "/app/settings/pipeline",
     "/app/settings/billing",
+    "/app/settings/integrations",
   ]) {
     expect([...start], p).toContain(p);
   }
 
-  const queue = [...start];
+  // The sync log is linked from Integrations once a CRM is connected; crawl it unconnected too.
+  const queue = [...start, "/app/settings/integrations/log"];
   const seen = new Set<string>();
   const problems: string[] = [];
   while (queue.length) {
@@ -206,7 +217,13 @@ test("(b) every link in the app shell and settings works when signed in", async 
   expect(errors).toEqual([]);
   expect(seen.size).toBeGreaterThan(8);
   // The pipeline pages were reached from the shell, and the deal page from the board.
-  for (const p of ["/app/deals", `/app/deals/${dealId}`, "/app/settings/pipeline"]) {
+  for (const p of [
+    "/app/deals",
+    `/app/deals/${dealId}`,
+    "/app/settings/pipeline",
+    "/app/settings/integrations",
+    "/app/settings/integrations/log",
+  ]) {
     expect([...seen], p).toContain(p);
   }
   expect([...seen].some((p) => p.startsWith("/app/contacts/"))).toBe(true);

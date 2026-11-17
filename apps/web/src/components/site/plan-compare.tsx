@@ -28,6 +28,10 @@ const ROWS: { group: string; rows: Row[] }[] = [
       { label: "Contacts", value: (p) => formatCount(p.contacts) },
       { label: "Cold emails per day", value: (p) => formatCount(p.emailsPerDay) },
       { label: "Calling minutes", value: () => "soon" },
+      {
+        label: "CRM sync (HubSpot, Pipedrive)",
+        value: (p) => (p.id === "solo" ? "Not included" : "yes"),
+      },
     ],
   },
   {
@@ -42,7 +46,6 @@ const ROWS: { group: string; rows: Row[] }[] = [
       { label: "Roles, invites and audit log", value: () => "yes" },
       { label: "Outlook / Microsoft 365", value: () => "soon" },
       { label: "Pipeline, deals and Reality Check", value: () => "yes" },
-      { label: "CRM sync (HubSpot, Pipedrive)", value: () => "soon" },
     ],
   },
   {

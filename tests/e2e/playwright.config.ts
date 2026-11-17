@@ -68,6 +68,14 @@ export default defineConfig({
           timeout: 15_000,
         },
         {
+          // Fake HubSpot + Pipedrive (OAuth, APIs, record pages, control plane): no real CRM.
+          command: "node support/fake-crm.mjs",
+          env: { FAKE_CRM_PORT: "4900" },
+          url: "http://127.0.0.1:4900/health",
+          reuseExistingServer: !process.env.CI,
+          timeout: 15_000,
+        },
+        {
           command: "node ../../apps/api/dist/main.js",
           url: "http://localhost:4000/health",
           env: {
@@ -84,6 +92,9 @@ export default defineConfig({
             NODE_EXTRA_CA_CERTS: tlsCert,
             // Scout runs on the deterministic fake model: no network, no API key.
             AI_PROVIDER: "fake",
+            // CRM sync talks to the fake CRM server above only.
+            CRM_MODE: "fake",
+            CRM_FAKE_BASE_URL: "http://127.0.0.1:4900",
           },
           reuseExistingServer: !process.env.CI,
           timeout: 60_000,

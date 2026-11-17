@@ -1,0 +1,24 @@
+{
+  "name": "@openline/crm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CRM sync (OL-E8): HubSpot and Pipedrive clients, mapping, conflict and sanitizing rules, the sync engine, and fake CRM servers for tests and e2e.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openline/compliance": "workspace:*",
+    "@openline/db": "workspace:*",
+    "@openline/email": "workspace:*",
+    "@openline/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@openline/config": "workspace:*",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

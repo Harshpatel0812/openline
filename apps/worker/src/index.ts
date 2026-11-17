@@ -1,5 +1,16 @@
 import { createProvider } from "@openline/ai";
-import { createDatabase } from "@openline/db";
+import { createCrmSync } from "@openline/crm";
+import {
+  and,
+  createDatabase,
+  eq,
+  inArray,
+  users,
+  withTenant,
+  workspaceMembers,
+} from "@openline/db";
+import { newMessageId, SmtpAdapter } from "@openline/email";
+import { CRM_PROVIDER_LABELS } from "@openline/shared";
 import {
   createPromiseKeeper,
   createRealityChecker,
@@ -56,15 +67,53 @@ async function main(): Promise<void> {
   // workspace's Scout budget (deterministic flags only otherwise). Its own loop and lease.
   const reality = createRealityChecker({ db: handle.db, provider });
 
+  // CRM sync (OL-E8): polling per connection, its own loop and lease (claim_due_crm_syncs).
+  const mailer = config.smtpUrl ? SmtpAdapter.fromUrl(config.smtpUrl) : null;
+  const fromEmail = /<([^>]+)>/.exec(config.mailFrom)?.[1] ?? config.mailFrom;
+  const crm = createCrmSync({
+    db: handle.db,
+    secretsKey: config.secretsKey,
+    config: config.crm,
+    notifyReconnect: async ({ workspaceId, provider: crmProvider }) => {
+      if (!mailer) return;
+      const admins = await withTenant(handle.db, { workspaceId }, (tx) =>
+        tx
+          .select({ email: users.email })
+          .from(workspaceMembers)
+          .innerJoin(users, eq(users.id, workspaceMembers.userId))
+          .where(
+            and(
+              eq(workspaceMembers.workspaceId, workspaceId),
+              inArray(workspaceMembers.role, ["owner", "admin"]),
+            ),
+          ),
+      );
+      const label = CRM_PROVIDER_LABELS[crmProvider];
+      const url = `${config.webUrl.replace(/\/$/, "")}/app/settings/integrations`;
+      for (const a of admins) {
+        await mailer.send({
+          from: { email: fromEmail, name: "Openline" },
+          to: a.email,
+          subject: `Reconnect ${label} to keep Openline in sync`,
+          text: `Hello,\n\nOpenline can no longer reach your ${label} account: access was revoked or expired. Sync is stopped until an admin reconnects it. Nothing was deleted on either side.\n\nReconnect ${label}: ${url}\n\n— Openline\n`,
+          html: `<p>Openline can no longer reach your ${label} account: access was revoked or expired. Sync is stopped until an admin reconnects it.</p><p><a href="${url}">Reconnect ${label}</a></p>`,
+          headers: { "Auto-Submitted": "auto-generated" },
+          messageId: newMessageId(fromEmail),
+        });
+      }
+    },
+  });
+
   sequencer.start(config.pollIntervalMs);
   replySync.start(config.pollIntervalMs);
   reality.start();
+  crm.start(config.pollIntervalMs);
   console.log(
-    `Openline worker started (${config.appEnv}, outreach: ${config.outreach.mode}, every ${config.pollIntervalMs} ms; replies every ${config.replySyncIntervalMs} ms, classifier: ${provider ? config.ai.provider : "keywords"})`,
+    `Openline worker started (${config.appEnv}, outreach: ${config.outreach.mode}, every ${config.pollIntervalMs} ms; replies every ${config.replySyncIntervalMs} ms, classifier: ${provider ? config.ai.provider : "keywords"}, crm: ${config.crm.mode})`,
   );
 
   const shutdown = async () => {
-    await Promise.all([sequencer.stop(), replySync.stop(), reality.stop()]);
+    await Promise.all([sequencer.stop(), replySync.stop(), reality.stop(), crm.stop()]);
     await promiseKeeper.idle();
     await handle.close();
     process.exit(0);

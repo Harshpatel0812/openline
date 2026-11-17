@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { ContactDto, ContactListDto } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
+import { CrmBadge } from "@/components/app/crm-badge";
 import { EnrollDialog } from "@/components/app/enroll-dialog";
 import {
   ContactFields,
@@ -28,6 +29,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api, ApiError, errorMessage, fieldErrorsFrom } from "@/lib/api";
+import { crmOf } from "@/lib/crm";
 import { contactName, formatDate } from "@/lib/format";
 import { useDebounced } from "@/lib/use-resource";
 
@@ -361,6 +363,11 @@ function ContactsView() {
                         >
                           {contactName(c)}
                         </Link>
+                        {crmOf(c) ? (
+                          <div className="mt-1">
+                            <CrmBadge crm={crmOf(c)} label={contactName(c)} />
+                          </div>
+                        ) : null}
                       </Td>
                       <Td className="text-slate-600 dark:text-slate-400">{c.email}</Td>
                       <Td>{c.company?.name ?? "—"}</Td>

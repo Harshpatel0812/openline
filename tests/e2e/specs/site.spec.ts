@@ -20,6 +20,7 @@ const PUBLIC_PAGES = [
   "/help/scout",
   "/help/compliance-basics",
   "/help/deliverability-basics",
+  "/help/crm-sync",
   "/blog",
   "/blog/why-cold-emails-land-in-spam",
   "/blog/how-many-follow-ups-is-too-many",

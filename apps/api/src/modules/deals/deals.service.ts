@@ -53,8 +53,10 @@ import {
 } from "@openline/shared";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
+import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
+import { crmBadges } from "../integrations/crm-badges";
 import { likePattern } from "../companies/companies.service";
 import { decodeCursor, encodeCursor } from "../contacts/contacts.service";
 import { activeStages } from "../pipeline/pipeline.service";
@@ -308,7 +310,22 @@ export class DealsService {
   constructor(
     @Inject(DB) private readonly handle: DatabaseHandle,
     private readonly audit: AuditService,
+    @Inject(CONFIG) private readonly config: AppConfig,
   ) {}
+
+  /** Adds the CRM sync badge (OL-E8) when a CRM is connected. */
+  private async withCrm<T extends DealDto>(tx: Tx, workspaceId: string, items: T[]): Promise<T[]> {
+    const badges = await crmBadges(
+      tx,
+      workspaceId,
+      "deal",
+      items.map((i) => i.id),
+      this.config.crm,
+    );
+    return badges.size
+      ? items.map((i) => (badges.has(i.id) ? { ...i, crm: badges.get(i.id) } : i))
+      : items;
+  }
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return withTenant(this.handle.db, { workspaceId: auth.workspaceId, userId: auth.userId }, fn);
@@ -415,7 +432,11 @@ export class DealsService {
       const items = rows.slice(0, query.limit);
       const last = items[items.length - 1];
       return {
-        items: items.map((r) => toDealDto(r, ctx)),
+        items: await this.withCrm(
+          tx,
+          ws,
+          items.map((r) => toDealDto(r, ctx)),
+        ),
         nextCursor:
           rows.length > query.limit && last ? encodeCursor(last.createdAtIso, last.d.id) : null,
       };
@@ -560,8 +581,9 @@ export class DealsService {
       )
       .where(and(eq(dealContacts.workspaceId, ws), eq(dealContacts.dealId, id)))
       .orderBy(asc(dealContacts.addedAt), asc(contacts.email));
+    const [dto] = await this.withCrm(tx, ws, [toDealDto(row, ctx)]);
     return {
-      ...toDealDto(row, ctx),
+      ...dto!,
       contacts: people,
       stageHistory: await this.history(tx, ws, id),
     };

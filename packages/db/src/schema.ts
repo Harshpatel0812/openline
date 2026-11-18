@@ -65,6 +65,8 @@ export const workspaces = pgTable("workspaces", {
   // Plan picked on /pricing (0012). Intent only: billing isn't switched on yet.
   chosenPlan: text("chosen_plan", { enum: ["solo", "team", "growth", "scale"] }),
   chosenBilling: text("chosen_billing", { enum: ["monthly", "annual"] }),
+  /** CRM sync feature flag (0014): null = follow the plan (see crmSyncEntitled). */
+  crmSyncEnabled: boolean("crm_sync_enabled"),
 });
 
 export const workspaceMembers = pgTable(
@@ -632,6 +634,200 @@ export const dealFlagDismissals = pgTable("deal_flag_dismissals", {
   dismissedBy: uuid("dismissed_by"),
   dismissedAt: ts("dismissed_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------- CRM sync (0014)
+
+export const CRM_PROVIDER_IDS = ["hubspot", "pipedrive"] as const;
+export const CRM_CONNECTION_STATES = [
+  "needs_setup",
+  "previewing",
+  "importing",
+  "active",
+  "paused",
+  "error",
+  "disconnected",
+] as const;
+export const CRM_OBJECT_TYPES = ["contact", "company", "deal"] as const;
+export const CRM_LINK_STATUSES = [
+  "linked",
+  "creating",
+  "unconfirmed",
+  "unlinked",
+  "tombstone",
+] as const;
+
+/** Per-object sync cursors (ISO times) plus the activity-note cursor. */
+export interface CrmObjectCursorJson {
+  /** CRM-clock time: changes at or after (− overlap) are read next. */
+  remote?: string;
+  /** Openline-clock time for local changes. Set = imported. */
+  local?: string;
+  /** Import paging cursor (resumable). */
+  after?: string;
+  /** Import: newest CRM modified time seen so far. */
+  seen?: string;
+}
+
+export interface CrmCursorsJson {
+  contact?: CrmObjectCursorJson;
+  company?: CrmObjectCursorJson;
+  deal?: CrmObjectCursorJson;
+  /** Local opt-outs pushed up to this suppression time. */
+  optOuts?: string;
+  /** Activity notes written for messages up to this time. */
+  notes?: string;
+}
+
+export interface CrmAccountMetaJson {
+  currencies?: string[];
+  defaultCurrency?: string;
+  portalId?: string;
+}
+
+export interface CrmConflictJson {
+  object: "contact" | "company" | "deal";
+  field: string;
+  winner: "openline" | "crm";
+  localAt: string;
+  remoteAt: string;
+  rule: "newest" | "openline" | "crm";
+}
+
+export const crmConnections = pgTable("crm_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  provider: text("provider", { enum: CRM_PROVIDER_IDS }).notNull(),
+  status: text("status", { enum: CRM_CONNECTION_STATES }).notNull().default("needs_setup"),
+  accountId: text("account_id"),
+  accountName: text("account_name"),
+  apiDomain: text("api_domain"),
+  scopes: text("scopes").array().notNull().default([]),
+  /** Sealed OAuth tokens; "" once disconnected. Never returned, never logged. */
+  secretSealed: text("secret_sealed").notNull().default(""),
+  pipelineId: text("pipeline_id"),
+  defaultOwnerId: uuid("default_owner_id"),
+  connectedBy: uuid("connected_by"),
+  connectedAt: ts("connected_at").notNull().defaultNow(),
+  options: jsonb("options").$type<Record<string, unknown>>().notNull().default({}),
+  cursors: jsonb("cursors").$type<CrmCursorsJson>().notNull().default({}),
+  accountMeta: jsonb("account_meta").$type<CrmAccountMetaJson>().notNull().default({}),
+  stageMappingComplete: boolean("stage_mapping_complete").notNull().default(false),
+  warnings: text("warnings").array().notNull().default([]),
+  nextSyncAt: ts("next_sync_at"),
+  syncLockedUntil: ts("sync_locked_until"),
+  emptyPolls: integer("empty_polls").notNull().default(0),
+  failureCount: integer("failure_count").notNull().default(0),
+  lastSyncAt: ts("last_sync_at"),
+  lastReconcileAt: ts("last_reconcile_at"),
+  resumesAt: ts("resumes_at"),
+  lastError: text("last_error"),
+  /** YYYY-MM-DD (UTC) of budgetSpent. */
+  budgetDay: date("budget_day", { mode: "string" }),
+  budgetSpent: integer("budget_spent").notNull().default(0),
+  reconnectNotifiedAt: ts("reconnect_notified_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const crmLinks = pgTable("crm_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  connectionId: uuid("connection_id").notNull(),
+  object: text("object", { enum: CRM_OBJECT_TYPES }).notNull(),
+  contactId: uuid("contact_id"),
+  companyId: uuid("company_id"),
+  dealId: uuid("deal_id"),
+  externalId: text("external_id"),
+  state: text("state", { enum: CRM_LINK_STATUSES }).notNull().default("linked"),
+  reason: text("reason"),
+  /** field → 16-hex hash of the last agreed value (never values). */
+  shadow: jsonb("shadow").$type<Record<string, string>>().notNull().default({}),
+  remoteModifiedAt: ts("remote_modified_at"),
+  syncedAt: ts("synced_at"),
+  reservedAt: ts("reserved_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const crmFieldMappings = pgTable("crm_field_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  connectionId: uuid("connection_id").notNull(),
+  object: text("object", { enum: CRM_OBJECT_TYPES }).notNull(),
+  localField: text("local_field").notNull(),
+  remoteField: text("remote_field"),
+  direction: text("direction", { enum: ["both", "to_crm", "from_crm", "off"] })
+    .notNull()
+    .default("both"),
+  sourceOfTruth: text("source_of_truth", { enum: ["newest", "openline", "crm"] })
+    .notNull()
+    .default("newest"),
+  standard: boolean("standard").notNull().default(false),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const crmStageMappings = pgTable("crm_stage_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  connectionId: uuid("connection_id").notNull(),
+  direction: text("direction", { enum: ["from_crm", "to_crm"] }).notNull(),
+  remoteStageId: text("remote_stage_id").notNull(),
+  stageId: uuid("stage_id").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+export const crmSyncRuns = pgTable("crm_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  connectionId: uuid("connection_id").notNull(),
+  kind: text("kind", { enum: ["preview", "import", "incremental", "reconcile"] }).notNull(),
+  status: text("status", { enum: ["running", "succeeded", "partial", "failed"] })
+    .notNull()
+    .default("running"),
+  counts: jsonb("counts").$type<Record<string, Record<string, number>>>().notNull().default({}),
+  examples: jsonb("examples")
+    .$type<Record<string, Record<string, string[]>>>()
+    .notNull()
+    .default({}),
+  conflicts: jsonb("conflicts").$type<CrmConflictJson[]>().notNull().default([]),
+  conflictCount: integer("conflict_count").notNull().default(0),
+  options: jsonb("options").$type<Record<string, unknown>>().notNull().default({}),
+  apiCalls: integer("api_calls").notNull().default(0),
+  tokens: integer("tokens").notNull().default(0),
+  startedBy: uuid("started_by"),
+  startedAt: ts("started_at").notNull().defaultNow(),
+  finishedAt: ts("finished_at"),
+  durationMs: integer("duration_ms"),
+  errorCode: text("error_code"),
+  expiresAt: ts("expires_at"),
+});
+
+export const crmSyncErrors = pgTable("crm_sync_errors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull(),
+  connectionId: uuid("connection_id").notNull(),
+  runId: uuid("run_id"),
+  object: text("object", { enum: CRM_OBJECT_TYPES }).notNull(),
+  localId: uuid("local_id"),
+  externalId: text("external_id"),
+  direction: text("direction", { enum: ["to_crm", "from_crm"] }).notNull(),
+  code: text("code").notNull(),
+  message: text("message").notNull(),
+  attempts: integer("attempts").notNull().default(1),
+  nextRetryAt: ts("next_retry_at"),
+  resolvedAt: ts("resolved_at"),
+  resolvedBy: uuid("resolved_by"),
+  resolution: text("resolution", { enum: ["fixed", "dismissed"] }),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+export type CrmConnectionRow = typeof crmConnections.$inferSelect;
+export type CrmLinkRow = typeof crmLinks.$inferSelect;
+export type CrmFieldMappingRow = typeof crmFieldMappings.$inferSelect;
+export type CrmStageMappingRow = typeof crmStageMappings.$inferSelect;
+export type CrmSyncRunRow = typeof crmSyncRuns.$inferSelect;
+export type CrmSyncErrorRow = typeof crmSyncErrors.$inferSelect;
 
 export type User = typeof users.$inferSelect;
 export type Session = typeof sessions.$inferSelect;

@@ -8,15 +8,22 @@ import {
   type DatabaseHandle,
   type Tx,
 } from "@openline/db";
-import type { SuppressionCreateSchema, SuppressionDto } from "@openline/shared";
+import {
+  LOCKED_SUPPRESSION_REASONS,
+  type SuppressionCreateSchema,
+  type SuppressionDto,
+} from "@openline/shared";
 import type { z } from "zod";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, notFound } from "../../common/http";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 
-/** Opt-outs the law requires us to honour permanently; they cannot be removed. */
-export const LOCKED_REASONS = new Set(["unsubscribed", "asked_not_to_contact"]);
+/**
+ * Opt-outs the law requires us to honour permanently; they cannot be removed. crm_unsubscribed
+ * (OL-E8) is an opt-out pulled from the connected CRM.
+ */
+export const LOCKED_REASONS: ReadonlySet<string> = new Set(LOCKED_SUPPRESSION_REASONS);
 
 type SuppressionCreate = z.infer<typeof SuppressionCreateSchema>;
 

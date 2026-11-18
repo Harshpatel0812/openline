@@ -552,3 +552,63 @@ proposed again until there is new activity. Nothing ever moves on its own.
 `claim_due_reality_checks(batch)` (openline_scheduler, ids and timestamps only, 10-minute lease)
 returns open deals not checked in the last 24 h (manual runs count) that have activity since their
 last check. Same budget gate as above; one failing deal never stops the batch or other jobs.
+
+# Sprint 7 additions
+
+## CRM sync (OL-E8)
+
+PRD `docs/product/OL-E8-crm-sync.md`, ADR 0006. Types and schemas: `packages/shared/src/crm.ts`
+(migration 0014); engine, clients and fakes: `packages/crm`. One connection per workspace
+(HubSpot **or** Pipedrive). **Entitlement:** Team plan and up, as the workspace feature flag
+`workspaces.crm_sync_enabled` (NULL = follow the plan: team / growth / scale and the trial yes,
+solo no; true / false force it). Without it, connect, setup / mappings, remote reads, preview /
+import, resume, sync-now and retry answer 403 `plan_upgrade_required`; status (which still returns
+the connection), runs, errors, pause, dismiss and disconnect keep working. Another workspace's connection, run,
+error or link is 404 (or an empty list). Errors are `{ code, message, details? }`.
+
+| Method + path                                               | Who           | Body / query                                                                                                                                                         | Response                                                                                                                                                                                     |
+| ----------------------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/integrations/crm`                                  | all           | —                                                                                                                                                                    | `CrmStatusDto { entitled, available: provider[], connection: CrmConnectionDto \| null }` (status, last / next sync, `resumesAt`, `openErrors`, `warnings`, Pipedrive `budget`)               |
+| `GET /v1/integrations/crm/:provider/authorize`              | owner, admin  | `:provider` = `hubspot` \| `pipedrive`; verified email                                                                                                               | `{ url }` consent URL (signed `state`, PKCE where supported) · 409 `crm_already_connected` · 501 `crm_not_configured` · 429 (10/h per person)                                                |
+| `GET /v1/integrations/crm/:provider/callback`               | public        | `?code&state` or `?error`                                                                                                                                            | 302 → `/app/settings/integrations?connected=<provider>` or `?error=state_invalid\|state_expired\|state_mismatch\|signed_out\|access_denied\|crm_failed\|crm_account_not_allowed\|…`          |
+| `GET /v1/integrations/crm/remote/pipelines`                 | owner, admin  | —                                                                                                                                                                    | `CrmPipelineDto[]` (Pipedrive adds `@won` / `@lost` status stages) · 409 `crm_reconnect_required` / `crm_busy` · 502 `crm_unavailable`                                                       |
+| `GET /v1/integrations/crm/remote/fields`                    | owner, admin  | `?object=contact\|company\|deal`                                                                                                                                     | `CrmRemoteFieldDto[] { key, label, type, readOnly }`                                                                                                                                         |
+| `PATCH /v1/integrations/crm`                                | owner, admin  | `{ pipelineId?, defaultOwnerId?, options?: { contactPush engaged\|all\|never, activityNotes, pipedriveDailyCap } }`                                                  | `CrmConnectionDto`; a new pipeline clears the stage mapping                                                                                                                                  |
+| `GET` / `PUT /v1/integrations/crm/stage-mappings`           | owner, admin  | `{ fromCrm: [{ remoteStageId, stageId }], toCrm: [{ stageId, remoteStageId }] }`                                                                                     | `{ fromCrm, toCrm, complete }` (GET pre-fills by name / kind with `suggested: true`) · 400 won/lost ↔ open, unknown stage, duplicate                                                         |
+| `GET` / `PUT /v1/integrations/crm/field-mappings`           | owner, admin  | `{ mappings: [{ object, localField (standard \| custom.<key>), remoteField \| null, direction both\|to_crm\|from_crm\|off, sourceOfTruth newest\|openline\|crm }] }` | `CrmFieldMappingDto[]`; ≤ 20 custom per object; enumerations / read-only CRM fields only `from_crm`; email is the key, never mapped; 400 for key / opt-out CRM fields or one CRM field twice |
+| `POST /v1/integrations/crm/import/preview`                  | owner, admin  | —                                                                                                                                                                    | 202 `{ runId }` (dry run: counts per bucket + ≤ 20 example ids, valid 1 h) · 409 `crm_stage_mapping_incomplete`                                                                              |
+| `POST /v1/integrations/crm/import`                          | owner, admin  | `{ previewId, confirmLawfulBasis: true, pushLocalOnly? }`                                                                                                            | 202 `{ runId }` (a `partial` preview may be imported) · 409 `crm_preview_required` / `crm_preview_expired`                                                                                   |
+| `POST /v1/integrations/crm/sync-now` · `/pause` · `/resume` | owner, admin  | —                                                                                                                                                                    | `CrmConnectionDto`; sync-now 6/h per connection (429)                                                                                                                                        |
+| `DELETE /v1/integrations/crm`                               | owner, admin  | `?forgetLinks=true\|false`                                                                                                                                           | `{ ok: true }`: revokes at the provider (best effort), erases the tokens, keeps id links unless `forgetLinks` (tombstones always stay); nothing is deleted in either system                  |
+| `GET /v1/integrations/crm/runs` · `/runs/:id`               | owner–manager | `?limit (≤100)&cursor`                                                                                                                                               | `{ items: CrmRunDto[], nextCursor }` newest first · `CrmRunDetailDto` adds `examples` and `conflictLog` (field, winner, both times — no values)                                              |
+| `GET /v1/integrations/crm/errors`                           | owner–manager | `?object&code&open=true\|false&limit&cursor`                                                                                                                         | `{ items: CrmSyncErrorDto[], nextCursor }` with `externalUrl`                                                                                                                                |
+| `POST /v1/integrations/crm/errors/:id/retry` · `/dismiss`   | owner, admin  | —                                                                                                                                                                    | `CrmSyncErrorDto` · 409 `crm_error_resolved`, `crm_merge_conflict` (retry: fix it in the CRM, then dismiss)                                                                                  |
+| `DELETE /v1/integrations/crm/pipedrive/uninstall`           | public        | Basic auth = our Pipedrive client credentials (no CSRF header)                                                                                                       | 200 marks that company's connections disconnected · 401 otherwise                                                                                                                            |
+
+**Record badges:** `ContactDto`, `CompanyDto` and `DealDto` (lists and details) gain
+`crm?: { provider, state: linked|creating|unconfirmed|unlinked|paused, url?, syncedAt?, reason? }`
+while a connection is set up; `reason` is `not_synced`, `deleted_in_crm`, `merge_conflict` or an open
+error code (e.g. `currency_mismatch`).
+
+**Audit:** `crm.connected`, `crm.disconnected`, `crm.reconnect_required`, `crm.paused`,
+`crm.resumed`, `crm.import_previewed`, `crm.import_started`, `crm.import_completed`,
+`crm.field_mapping_changed`, `crm.stage_mapping_changed`, `crm.options_changed`,
+`crm.error_dismissed`, and `contact.suppressed` with `source: "crm"` for pulled opt-outs (new
+locked suppression reason `crm_unsubscribed`). No tokens, field values or CRM text in metadata.
+
+**Engine** (`apps/worker`, or in the API with `RUN_SCHEDULER=true`): `claim_due_crm_syncs`
+(10-min lease) every 10 min (HubSpot) / 15 min (Pipedrive), 30 min after 4 empty polls; per-field
+last-writer-wins with shadows (echo suppression), opt-outs both ways and never a re-subscribe,
+deletes unlink, merges re-match by key, `creating` reservations before every CRM create, 429 /
+budget pauses with `resumesAt`, 5xx back-off 1 / 5 / 30 min then hourly, record retries at 5 min /
+30 min / 2 h. Activity notes (opt-in) carry no subject or body.
+
+| Env var (API and worker)                                                         | Purpose                                                                                              | Default (dev / test)                               |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `CRM_MODE`                                                                       | `fake` (local fakes only) \| `sandbox` (real APIs, allowlisted accounts) \| `live` (production only) | `fake`; `sandbox` in staging; `live` in production |
+| `CRM_FAKE_BASE_URL`                                                              | Fake CRM server (loopback only): `node tests/e2e/support/fake-crm.mjs`                               | `http://127.0.0.1:4900`                            |
+| `CRM_SANDBOX_ACCOUNT_IDS`                                                        | Comma-separated HubSpot portal / Pipedrive company ids allowed in sandbox mode (empty = none)        | unset                                              |
+| `CRM_HUBSPOT_CLIENT_ID` / `_SECRET`                                              | HubSpot public app (AWS Secrets Manager outside development)                                         | fixed fake values in `fake` mode                   |
+| `CRM_PIPEDRIVE_CLIENT_ID` / `_SECRET`                                            | Pipedrive app                                                                                        | fixed fake values in `fake` mode                   |
+| `CRM_HUBSPOT_PKCE` / `CRM_PIPEDRIVE_PKCE`                                        | Send PKCE (only where the provider supports it)                                                      | `true` in `fake` mode, else false                  |
+| `CRM_HUBSPOT_INTERVAL_MS` · `CRM_PIPEDRIVE_INTERVAL_MS` · `CRM_IDLE_INTERVAL_MS` | Polling cadence                                                                                      | 600000 · 900000 · 1800000                          |

@@ -17,9 +17,11 @@ import {
 import type { ContactCreate, ContactDto, ContactListDto, ContactUpdate } from "@openline/shared";
 import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
+import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
 import { CompaniesService, likePattern } from "../companies/companies.service";
+import { crmBadges } from "../integrations/crm-badges";
 import { recordConsent } from "./consent.service";
 
 /** True when `tz` is an IANA time zone the runtime knows. */
@@ -132,7 +134,22 @@ export class ContactsService {
     @Inject(DB) private readonly handle: DatabaseHandle,
     private readonly audit: AuditService,
     private readonly companies: CompaniesService,
+    @Inject(CONFIG) private readonly config: AppConfig,
   ) {}
+
+  /** Adds the CRM sync badge (OL-E8) when a CRM is connected. */
+  private async withCrm(tx: Tx, workspaceId: string, items: ContactDto[]): Promise<ContactDto[]> {
+    const badges = await crmBadges(
+      tx,
+      workspaceId,
+      "contact",
+      items.map((i) => i.id),
+      this.config.crm,
+    );
+    return badges.size
+      ? items.map((i) => (badges.has(i.id) ? { ...i, crm: badges.get(i.id) } : i))
+      : items;
+  }
 
   private scope<T>(auth: AuthContext, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return withTenant(this.handle.db, { workspaceId: auth.workspaceId, userId: auth.userId }, fn);
@@ -175,7 +192,7 @@ export class ContactsService {
       const items = rows.slice(0, query.limit);
       const last = items[items.length - 1];
       return {
-        items: items.map(toDto),
+        items: await this.withCrm(tx, auth.workspaceId, items.map(toDto)),
         nextCursor:
           rows.length > query.limit && last ? encodeCursor(last.createdAtIso, last.id) : null,
         total: Number(totalRow?.n ?? 0),
@@ -184,7 +201,12 @@ export class ContactsService {
   }
 
   get(auth: AuthContext, id: string): Promise<ContactDto> {
-    return this.scope(auth, async (tx) => toDto(await this.load(tx, auth, id)));
+    return this.scope(auth, async (tx) => {
+      const [dto] = await this.withCrm(tx, auth.workspaceId, [
+        toDto(await this.load(tx, auth, id)),
+      ]);
+      return dto!;
+    });
   }
 
   async create(auth: AuthContext, input: ContactCreate): Promise<ContactDto> {

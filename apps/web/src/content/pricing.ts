@@ -89,8 +89,14 @@ export const ADD_ONS = [
   { name: "Extra user", price: "$15 / month", note: "Add a seat without changing plan." },
 ];
 
-/** Every plan includes all of these. `soon` marks features that are not built yet. */
-export const INCLUDED_FEATURES: { group: string; items: { label: string; soon?: boolean }[] }[] = [
+/**
+ * Every plan includes all of these (CRM sync: Team and up, see `note`). `soon` marks features that
+ * are not built yet.
+ */
+export const INCLUDED_FEATURES: {
+  group: string;
+  items: { label: string; soon?: boolean; note?: string }[];
+}[] = [
   {
     group: "Contacts",
     items: [
@@ -129,7 +135,7 @@ export const INCLUDED_FEATURES: { group: string; items: { label: string; soon?: 
       { label: "Roles: owner, admin, manager, rep" },
       { label: "Invites and audit log" },
       { label: "Pipeline and deals board" },
-      { label: "HubSpot and Pipedrive sync", soon: true },
+      { label: "HubSpot and Pipedrive sync", note: "Team plan and up" },
       { label: "Browser calling minutes", soon: true },
     ],
   },
@@ -142,7 +148,7 @@ export const PRICING_FAQ = [
   },
   {
     q: "Is every feature really on every plan?",
-    a: "Yes. Plans differ only in users, mailboxes, contacts, daily sending volume and support. Compliance checks, Scout and the reply inbox are on Solo exactly as they are on Scale.",
+    a: "Almost. Plans differ in users, mailboxes, contacts, daily sending volume and support, and two-way HubSpot and Pipedrive sync starts on Team. Compliance checks, Scout, the reply inbox and the deals pipeline are on Solo exactly as they are on Scale.",
   },
   {
     q: "How does the free trial work?",

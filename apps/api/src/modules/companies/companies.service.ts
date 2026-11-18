@@ -15,7 +15,9 @@ import {
 } from "@openline/db";
 import { FREE_MAIL_DOMAINS, type CompanyDto } from "@openline/shared";
 import type { AuthContext } from "../../common/auth-context";
+import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
+import { crmBadges } from "../integrations/crm-badges";
 
 const DOMAIN_RE = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 const SECOND_LEVEL = new Set(["co", "com", "org", "net", "ac", "gov", "edu", "ltd", "plc"]);
@@ -27,11 +29,16 @@ export function likePattern(q: string): string {
 }
 
 /**
- * The company domain for a contact: the explicit domain if given, else the email's domain.
+ * The company domain for a contact: the explicit domain if given, else the email's domain,
+ * normalized (lower case, "www." stripped).
  * Free-mail domains (gmail.com, ...) never become companies.
  */
 export function companyDomainFor(email: string, explicit?: string | null): string | null {
-  const domain = (explicit ?? email.split("@")[1] ?? "").toLowerCase();
+  // Stored in match form: lower case, no leading "www." (the CRM sync matches on it, OL-E8).
+  const domain = (explicit ?? email.split("@")[1] ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\d?\./, "");
   if (!DOMAIN_RE.test(domain) || FREE_MAIL_DOMAINS.has(domain)) return null;
   return domain;
 }
@@ -51,7 +58,10 @@ export function companyNameFromDomain(domain: string): string {
 
 @Injectable()
 export class CompaniesService {
-  constructor(@Inject(DB) private readonly handle: DatabaseHandle) {}
+  constructor(
+    @Inject(DB) private readonly handle: DatabaseHandle,
+    @Inject(CONFIG) private readonly config: AppConfig,
+  ) {}
 
   list(auth: AuthContext, q?: string): Promise<{ items: CompanyDto[] }> {
     return withTenant(
@@ -78,11 +88,19 @@ export class CompaniesService {
           .groupBy(companies.id)
           .orderBy(asc(companies.name), asc(companies.id))
           .limit(200);
+        const badges = await crmBadges(
+          tx,
+          auth.workspaceId,
+          "company",
+          rows.map((r) => r.id),
+          this.config.crm,
+        );
         return {
           items: rows.map((r) => ({
             ...r,
             contactCount: Number(r.contactCount),
             createdAt: r.createdAt.toISOString(),
+            ...(badges.has(r.id) ? { crm: badges.get(r.id) } : {}),
           })),
         };
       },

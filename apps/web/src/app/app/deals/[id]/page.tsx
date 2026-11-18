@@ -22,6 +22,7 @@ import {
   moveErrorMessage,
   StageKindBadge,
 } from "@/components/app/deal-parts";
+import { CrmBadge } from "@/components/app/crm-badge";
 import { useMe } from "@/components/app/me-context";
 import { RealityCheckPanel } from "@/components/app/reality-check";
 import { ContactPicker, TaskDialog, type PickedContact } from "@/components/app/task-dialog";
@@ -53,6 +54,7 @@ import {
   notifyDealsChanged,
   stageOrder,
 } from "@/lib/deals";
+import { crmOf } from "@/lib/crm";
 import { zodFieldErrors } from "@/lib/format";
 import { fullDateTime, relativeTime } from "@/lib/inbox";
 import { TASKS_CHANGED_EVENT } from "@/lib/tasks";
@@ -813,6 +815,7 @@ export default function DealPage() {
             )}
             <StageKindBadge kind={d.stage.kind} />
             <DealBadges deal={d} />
+            <CrmBadge crm={crmOf(d)} label={d.name} />
           </span>
         }
         actions={

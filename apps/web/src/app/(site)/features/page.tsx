@@ -7,7 +7,7 @@ import { pageMetadata } from "@/lib/seo";
 export const metadata = pageMetadata({
   title: "Features",
   description:
-    "Contacts and CSV import, sequences with stop rules, reply detection and inbox, a deals pipeline with Reality Check, deliverability guardrails, compliance checks and Scout, an AI assistant that waits for your approval.",
+    "Contacts and CSV import, sequences with stop rules, reply detection and inbox, a deals pipeline with Reality Check, HubSpot and Pipedrive sync, deliverability guardrails, compliance checks and Scout, an AI assistant that waits for your approval.",
   path: "/features",
 });
 
@@ -185,6 +185,10 @@ const groups: {
         body: "Append-only log of sign-ins, role changes, imports, consent changes, unsubscribes and more.",
       },
       {
+        title: "HubSpot and Pipedrive sync",
+        body: "Two-way sync of contacts, companies and deals, with a dry-run preview, per-field conflict rules and opt-outs that travel to your CRM. On the Team plan and up.",
+      },
+      {
         title: "Workspace isolation",
         body: "Every workspace's data is walled off by row-level security in the database. Mailbox credentials are encrypted with AES-256-GCM.",
       },
@@ -195,7 +199,6 @@ const groups: {
 const comingSoon = [
   "Outlook / Microsoft 365 mailboxes",
   "Browser calling",
-  "HubSpot and Pipedrive sync",
   "Mailbox warm-up",
   "Domain health dashboard",
 ];
@@ -218,8 +221,8 @@ export default function FeaturesPage() {
         }
       >
         <p>
-          Every feature is on every plan. Here&apos;s what Openline does today — and, clearly
-          marked, what&apos;s coming next.
+          Every feature is on every plan, except CRM sync, which starts on Team. Here&apos;s what
+          Openline does today — and, clearly marked, what&apos;s coming next.
         </p>
       </PageHero>
 

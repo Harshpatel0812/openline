@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useId, useState } from "react";
 import type { CompanyDto } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
+import { CrmBadge } from "@/components/app/crm-badge";
 import {
   Alert,
   Button,
@@ -16,6 +17,7 @@ import {
   Th,
 } from "@/components/ui";
 import { errorMessage } from "@/lib/api";
+import { crmOf } from "@/lib/crm";
 import { formatDate } from "@/lib/format";
 import { useDebounced, useResource } from "@/lib/use-resource";
 
@@ -89,6 +91,11 @@ export default function CompaniesPage() {
                       >
                         {c.name}
                       </Link>
+                      {crmOf(c) ? (
+                        <div className="mt-1">
+                          <CrmBadge crm={crmOf(c)} label={c.name} />
+                        </div>
+                      ) : null}
                     </Td>
                     <Td className="text-slate-600 dark:text-slate-400">{c.domain ?? "—"}</Td>
                     <Td className="text-right tabular-nums">{c.contactCount.toLocaleString()}</Td>

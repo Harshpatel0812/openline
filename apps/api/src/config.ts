@@ -1,3 +1,4 @@
+import { resolveCrmConfig, type CrmConfig } from "@openline/crm";
 import type { GoogleOAuthConfig } from "@openline/email";
 import {
   resolveAppEnv,
@@ -78,6 +79,12 @@ const EnvSchema = z.object({
   // ---------------------------------------------------------------- OL-E5: public website
   /** Where website contact-form enquiries are emailed. Required in staging and production. */
   CONTACT_INBOX: z.email().optional(),
+
+  // ---------------------------------------------------------------- OL-E8: CRM sync
+  // Read by resolveCrmConfig (packages/crm): CRM_MODE, CRM_FAKE_BASE_URL, CRM_SANDBOX_ACCOUNT_IDS,
+  // CRM_HUBSPOT_CLIENT_ID/SECRET, CRM_PIPEDRIVE_CLIENT_ID/SECRET, CRM_*_PKCE, CRM_*_INTERVAL_MS.
+  /** Connect / authorize attempts per person per hour. */
+  CRM_CONNECTS_PER_USER_PER_HOUR: z.coerce.number().int().positive().default(10),
 });
 
 type Env = z.infer<typeof EnvSchema>;
@@ -113,6 +120,8 @@ export type AppConfig = Omit<
   allowPrivateSmtpHosts: boolean;
   /** Scout model access (see resolveAiConfig). */
   ai: ScoutAiConfig;
+  /** CRM sync endpoints and mode (fake / sandbox / live, see packages/crm config.ts). */
+  crm: CrmConfig;
 };
 
 export interface ScoutAiConfig {
@@ -222,11 +231,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       : undefined;
 
   const ai = resolveAiConfig(parsed, appEnv);
+  const crm = resolveCrmConfig(appEnv, env);
 
   const cookieSecure = production;
   return {
     ...parsed,
     ai,
+    crm,
     // Production applies migrations as a separate deploy step with the owner role; the API itself
     // connects as a role that owns nothing (see infra/terraform/README.md).
     AUTO_MIGRATE: parsed.AUTO_MIGRATE ? parsed.AUTO_MIGRATE === "true" : !production,

@@ -17,10 +17,12 @@
   },
   "dependencies": {
     "@openline/ai": "workspace:*",
+    "@openline/crm": "workspace:*",
     "@openline/db": "workspace:*",
     "@openline/email": "workspace:*",
     "@openline/replies": "workspace:*",
     "@openline/sequencer": "workspace:*",
+    "@openline/shared": "workspace:*",
     "zod": "^4.6.7"
   }
 }

@@ -74,6 +74,13 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://openline:openline@localhost:5432/openline_test
 
+      # The CRM sync engine (packages/crm) against the same real Postgres: RLS, the claim and
+      # uninstall functions, triggers and unique constraints behave as in production.
+      - name: CRM sync engine tests on real Postgres 16
+        run: pnpm --filter @openline/crm test
+        env:
+          TEST_DATABASE_URL: postgresql://openline:openline@localhost:5432/openline_test
+
       - name: Audit dependencies (fail on high or critical)
         run: pnpm audit --audit-level=high --prod
 

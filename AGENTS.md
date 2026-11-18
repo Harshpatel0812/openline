@@ -59,6 +59,8 @@ packages/compliance Deterministic rules: send window, consent (CASL), suppressio
 packages/email      Mail adapters + RFC 8058 unsubscribe headers + bot-open filter
 packages/sequencer  Sending engine: claim due enrollments, compliance checks, render, send
 packages/ai         Scout guardrails: untrusted-content fencing, approval state machine
+packages/crm        CRM sync (ADR 0006): HubSpot + Pipedrive clients, mapping / conflict rules, the
+                    sync engine (run by apps/worker), fake CRM servers for tests and e2e
 packages/db         SQL migrations (+RLS), Drizzle schema, withTenant(), migrator
 packages/ui         Design system (Sprint 1)
 packages/config     Shared tsconfig preset
@@ -110,10 +112,12 @@ tests/e2e, tests/load
 - **Phase:** 2 — Build the MVP. Done: Sprints 1–2 (foundation, contacts), Sprint 3 (sending
   engine), Sprint 4 (reply detection, reply inbox, Scout v1), public website (OL-E5), Sprint 5 (tasks,
   Promise Keeper, Compliance Copilot), Sprint 6 (pipeline: stages, deals, board, Pipeline Reality
-  Check).
+  Check), Sprint 7 (two-way HubSpot and Pipedrive CRM sync).
 - **API contract:** `docs/api/README.md`. PRDs: `docs/product/`.
-- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`, `S5.md`, `S6.md`.
-- **Next:** Sprint 7 — CRM sync: two-way HubSpot and Pipedrive sync (contacts, companies, deals).
+- **Done:** `docs/sprints/S1-S2.md`, `S3.md`, `S4.md`, `S5.md`, `S6.md`, `S7.md`.
+- **Next:** Sprint 8 — billing (Stripe) and plan limits.
+- **CRM apps:** registering the HubSpot / Pipedrive apps and their secrets is a one-time owner
+  task: `docs/runbooks/crm-apps-setup.md`.
 - **Deploy rule:** every deployed service sets `APP_ENV` (staging | production); only production
   emails real prospects. See `infra/terraform/README.md`.
 - **AWS:** us-east-1 (N. Virginia). One-time account setup: `docs/runbooks/aws-setup.md`.

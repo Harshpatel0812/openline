@@ -10,3 +10,4 @@ export * from "./compliance";
 export * from "./tasks";
 export * from "./deals";
 export * from "./reality";
+export * from "./crm";

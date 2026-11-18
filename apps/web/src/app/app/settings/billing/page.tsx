@@ -157,7 +157,7 @@ function BillingPageContent() {
               <p className="mt-1 text-slate-600 dark:text-slate-400">
                 {saved
                   ? "You can change it any time before your trial ends."
-                  : "Pick the plan you'd like after the trial. Every plan has every feature."}
+                  : "Pick the plan you'd like after the trial. Every plan has every feature; CRM sync starts on Team."}
               </p>
             </div>
           </Card>

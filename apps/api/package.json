@@ -17,6 +17,7 @@
     "@nestjs/platform-express": "^11.0.0",
     "@openline/ai": "workspace:*",
     "@openline/compliance": "workspace:*",
+    "@openline/crm": "workspace:*",
     "@openline/db": "workspace:*",
     "@openline/email": "workspace:*",
     "@openline/replies": "workspace:*",

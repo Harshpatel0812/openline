@@ -17,6 +17,7 @@ import {
   ContactSequencesCard,
 } from "@/components/app/contact-sections";
 import { CompliancePanel } from "@/components/app/compliance";
+import { CrmBadge } from "@/components/app/crm-badge";
 import { DealsCard } from "@/components/app/deals-card";
 import { useMe } from "@/components/app/me-context";
 import { PromisesPanel } from "@/components/app/promises";
@@ -34,6 +35,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api, ApiError, errorMessage, fieldErrorsFrom } from "@/lib/api";
+import { crmOf } from "@/lib/crm";
 import { contactName, formatDate } from "@/lib/format";
 import { useResource } from "@/lib/use-resource";
 
@@ -222,9 +224,14 @@ export default function ContactDetailPage() {
       <PageHeader
         title={name}
         description={
-          contact.title && contact.company
-            ? `${contact.title} at ${contact.company.name}`
-            : contact.email
+          <span className="flex flex-wrap items-center gap-2">
+            <span>
+              {contact.title && contact.company
+                ? `${contact.title} at ${contact.company.name}`
+                : contact.email}
+            </span>
+            <CrmBadge crm={crmOf(contact)} label={name} />
+          </span>
         }
         actions={
           can("owner", "admin", "manager") ? (

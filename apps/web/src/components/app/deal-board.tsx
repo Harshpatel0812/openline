@@ -5,7 +5,9 @@ import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from "
 import type { DealDto, DealSummaryDto, PipelineStageDto } from "@openline/shared";
 import { Avatar, Badge, cx, EmptyState, initials, Table, Td, Th } from "@/components/ui";
 import { formatCalendarDate, formatMoney, totalsFor, type Totals } from "@/lib/deals";
+import { crmOf } from "@/lib/crm";
 import { formatDate } from "@/lib/format";
+import { CrmBadge } from "./crm-badge";
 import { DealBadges, MoveMenu, StageKindBadge } from "./deal-parts";
 
 export type MoveRequest = (deal: DealDto, stage: PipelineStageDto) => void;
@@ -176,6 +178,11 @@ function DealCard({
           </span>
         ) : null}
       </p>
+      {crmOf(deal) ? (
+        <div className="mt-2">
+          <CrmBadge crm={crmOf(deal)} label={deal.name} />
+        </div>
+      ) : null}
       <div className="mt-2 flex items-end justify-between gap-2">
         <DealBadges deal={deal} compact />
         {deal.canEdit ? (
@@ -550,8 +557,9 @@ export function DealTable({
               >
                 {d.name}
               </Link>
-              <div className="mt-1">
+              <div className="mt-1 flex flex-wrap gap-1">
                 <DealBadges deal={d} compact />
+                <CrmBadge crm={crmOf(d)} label={d.name} />
               </div>
             </Td>
             <Td className="text-slate-600 dark:text-slate-400">{d.company?.name ?? "—"}</Td>

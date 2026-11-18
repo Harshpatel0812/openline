@@ -13,6 +13,7 @@ import type {
 } from "@openline/shared";
 import { PageHeader } from "@/components/app/app-shell";
 import { useMe } from "@/components/app/me-context";
+import { DealsAttentionCard } from "@/components/app/deals-card";
 import { PromisesPanel } from "@/components/app/promises";
 import { TaskUrgencyBadge } from "@/components/app/task-list";
 import { Alert, Button, Card, CardHeader, cx, Spinner } from "@/components/ui";
@@ -301,6 +302,7 @@ export default function TodayPage() {
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,42rem)_minmax(0,22rem)]">
         <div className="space-y-4 lg:order-2">
           <RepliesCard />
+          <DealsAttentionCard />
           <PromisesPanel limit={3} />
         </div>
         <Card className="max-w-2xl">

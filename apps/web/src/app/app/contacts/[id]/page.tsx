@@ -17,6 +17,7 @@ import {
   ContactSequencesCard,
 } from "@/components/app/contact-sections";
 import { CompliancePanel } from "@/components/app/compliance";
+import { DealsCard } from "@/components/app/deals-card";
 import { useMe } from "@/components/app/me-context";
 import { PromisesPanel } from "@/components/app/promises";
 import { ContactTasksCard } from "@/components/app/task-list";
@@ -238,6 +239,21 @@ export default function ContactDetailPage() {
         <div className="space-y-6 lg:col-span-2">
           <PromisesPanel contactId={contact.id} contactLabel={name} />
           <ContactTasksCard contactId={contact.id} contactName={name} />
+          <DealsCard
+            path={`/contacts/${contact.id}/deals`}
+            label={name}
+            prefill={{
+              name: `${contact.company?.name ?? name} — new deal`,
+              contact: {
+                id: contact.id,
+                name,
+                email: contact.email,
+                company: contact.company
+                  ? { id: contact.company.id, name: contact.company.name }
+                  : null,
+              },
+            }}
+          />
           <Card>
             <CardHeader title="Details" />
             <form onSubmit={onSave} noValidate className="space-y-4 p-5">
@@ -294,7 +310,12 @@ export default function ContactDetailPage() {
               <Detail label="Company">
                 {contact.company ? (
                   <>
-                    {contact.company.name}
+                    <Link
+                      href={`/app/companies/${contact.company.id}`}
+                      className="text-indigo-700 hover:underline dark:text-indigo-300"
+                    >
+                      {contact.company.name}
+                    </Link>
                     {contact.company.domain ? (
                       <span className="text-slate-500 dark:text-slate-400">
                         {" "}

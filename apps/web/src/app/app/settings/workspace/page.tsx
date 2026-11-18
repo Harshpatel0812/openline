@@ -19,6 +19,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api, errorMessage, fieldErrorsFrom } from "@/lib/api";
+import { currencyName, currencyOptions } from "@/lib/deals";
 import { zodFieldErrors } from "@/lib/format";
 import { useResource } from "@/lib/use-resource";
 
@@ -26,12 +27,14 @@ interface Values {
   name: string;
   mailingAddress: string;
   defaultTimeZone: string;
+  currency: string;
 }
 
 const fromDto = (w: WorkspaceSettingsDto): Values => ({
   name: w.name,
   mailingAddress: w.mailingAddress ?? "",
   defaultTimeZone: w.defaultTimeZone,
+  currency: w.currency ?? "USD",
 });
 
 export default function WorkspaceSettingsPage() {
@@ -74,6 +77,7 @@ export default function WorkspaceSettingsPage() {
       name: values.name,
       mailingAddress: values.mailingAddress.trim() === "" ? undefined : values.mailingAddress,
       defaultTimeZone: values.defaultTimeZone,
+      currency: values.currency,
     });
     if (!parsed.success) {
       setErrors(zodFieldErrors(parsed.error.issues));
@@ -183,6 +187,27 @@ export default function WorkspaceSettingsPage() {
                 {zones.map((z) => (
                   <option key={z} value={z}>
                     {z.replaceAll("_", " ")}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field
+            label="Currency"
+            hint="New deals use it, and pipeline totals are shown in it. Existing deals keep their own currency; amounts aren't converted."
+            error={errors.currency}
+          >
+            {(p) => (
+              <Select
+                {...p}
+                value={values.currency}
+                onChange={(e) => set("currency")(e.target.value)}
+                disabled={disabled}
+              >
+                {currencyOptions(values.currency).map((c) => (
+                  <option key={c} value={c}>
+                    {currencyName(c)}
                   </option>
                 ))}
               </Select>

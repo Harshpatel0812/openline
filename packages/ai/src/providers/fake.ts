@@ -1,4 +1,5 @@
 import { rulePromiseCandidates } from "../promises";
+import { ruleEvidenceFromPrompt } from "../reality";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../provider";
 
 /** A scripted answer: text, an error to throw, or a function of the request. */
@@ -55,6 +56,10 @@ function lastUserText(request: LlmRequest): string {
 function defaultAnswer(request: LlmRequest): string {
   const props = (request.jsonSchema?.properties ?? {}) as Record<string, unknown>;
   const prompt = lastUserText(request);
+  if ("evidence" in props) {
+    // Reality Check: keyword evidence over the fenced emails.
+    return JSON.stringify({ evidence: ruleEvidenceFromPrompt(prompt) });
+  }
   if ("promises" in props) {
     // Promise extraction: the rule-based extractor over the fenced email text.
     const fenced = /<(UNTRUSTED-[0-9a-f]+) source="([^"]*)">\n([\s\S]*)\n<\/\1>/.exec(prompt);

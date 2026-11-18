@@ -41,7 +41,8 @@ const ROWS: { group: string; rows: Row[] }[] = [
       { label: "Suppression list and consent records", value: () => "yes" },
       { label: "Roles, invites and audit log", value: () => "yes" },
       { label: "Outlook / Microsoft 365", value: () => "soon" },
-      { label: "Pipeline and CRM sync", value: () => "soon" },
+      { label: "Pipeline, deals and Reality Check", value: () => "yes" },
+      { label: "CRM sync (HubSpot, Pipedrive)", value: () => "soon" },
     ],
   },
   {

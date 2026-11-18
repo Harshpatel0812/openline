@@ -2,6 +2,7 @@ import { createProvider } from "@openline/ai";
 import { createDatabase } from "@openline/db";
 import {
   createPromiseKeeper,
+  createRealityChecker,
   createReplySync,
   createScoutReplyClassifier,
 } from "@openline/replies";
@@ -9,9 +10,10 @@ import { createSequencer } from "@openline/sequencer";
 import { loadWorkerConfig } from "./config";
 
 /**
- * Production worker. Runs the sequence engine and reply sync against Postgres; any number of
- * copies can run side by side (claim_due_enrollments / claim_due_mailbox_syncs lease each
- * enrollment and mailbox to exactly one worker).
+ * Production worker. Runs the sequence engine, reply sync and the daily Reality Check against
+ * Postgres; any number of copies can run side by side (claim_due_enrollments /
+ * claim_due_mailbox_syncs / claim_due_reality_checks lease each enrollment, mailbox and deal to
+ * exactly one worker).
  */
 async function main(): Promise<void> {
   const config = loadWorkerConfig();
@@ -50,14 +52,19 @@ async function main(): Promise<void> {
     intervalMs: config.replySyncIntervalMs,
   });
 
+  // Pipeline Reality Check: at most once a day per open deal with new activity, within the
+  // workspace's Scout budget (deterministic flags only otherwise). Its own loop and lease.
+  const reality = createRealityChecker({ db: handle.db, provider });
+
   sequencer.start(config.pollIntervalMs);
   replySync.start(config.pollIntervalMs);
+  reality.start();
   console.log(
     `Openline worker started (${config.appEnv}, outreach: ${config.outreach.mode}, every ${config.pollIntervalMs} ms; replies every ${config.replySyncIntervalMs} ms, classifier: ${provider ? config.ai.provider : "keywords"})`,
   );
 
   const shutdown = async () => {
-    await Promise.all([sequencer.stop(), replySync.stop()]);
+    await Promise.all([sequencer.stop(), replySync.stop(), reality.stop()]);
     await promiseKeeper.idle();
     await handle.close();
     process.exit(0);

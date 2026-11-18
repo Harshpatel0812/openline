@@ -5,6 +5,7 @@ import {
   asc,
   eq,
   isNull,
+  seedDefaultStages,
   sessions,
   users,
   withIdentity,
@@ -92,6 +93,7 @@ export class AuthService {
           chosenBilling: input.plan ? (input.billing ?? "monthly") : null,
         });
         await tx.insert(workspaceMembers).values({ workspaceId, userId: user!.id, role: "owner" });
+        await seedDefaultStages(tx, workspaceId);
         await this.audit.record(tx, {
           workspaceId,
           actorId: user!.id,

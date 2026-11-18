@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   InboxReplyInputSchema,
@@ -36,6 +37,7 @@ import { decisionLabel, formatDateTime, titleCase } from "@/lib/labels";
 import { scoutErrorMessage, type ScoutProblem } from "@/lib/scout";
 import { useResource } from "@/lib/use-resource";
 import { ComplianceBadge } from "./compliance";
+import { DealDialog } from "./deal-dialog";
 import { PromisesPanel } from "./promises";
 import { ReplyLabelChip } from "./reply-label";
 import { scoutUnavailableReason } from "./scout-first-touch";
@@ -348,8 +350,10 @@ export function InboxDetail({
   onBack: () => void;
 }) {
   const { toast } = useToast();
+  const router = useRouter();
   const { data, error, loading, reload, setData } = useResource<InboxMessageDto>(`/inbox/${id}`);
   const [handling, setHandling] = useState(false);
+  const [creatingDeal, setCreatingDeal] = useState(false);
   const [composer, setComposer] = useState("");
   const [liveNote, setLiveNote] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -487,7 +491,29 @@ export function InboxDetail({
                 Open in mailbox<span className="sr-only"> (opens in a new tab)</span> ↗
               </a>
             ) : null}
+            {m.dealPrefill ? (
+              <Button size="sm" variant="secondary" onClick={() => setCreatingDeal(true)}>
+                Create deal
+              </Button>
+            ) : null}
           </div>
+          {m.dealPrefill?.openDeals.length ? (
+            <p className="text-xs text-slate-700 dark:text-slate-300">
+              Open deals with {contactLabel ?? name}:{" "}
+              {m.dealPrefill.openDeals.map((d, i) => (
+                <span key={d.id}>
+                  {i ? ", " : ""}
+                  <Link
+                    href={`/app/deals/${d.id}`}
+                    className="font-medium text-indigo-700 underline-offset-2 hover:underline dark:text-indigo-300"
+                  >
+                    {d.name}
+                  </Link>{" "}
+                  ({d.stageName})
+                </span>
+              ))}
+            </p>
+          ) : null}
         </header>
 
         <div className="space-y-6 px-5 py-5">
@@ -634,6 +660,31 @@ export function InboxDetail({
           </section>
         </div>
       </article>
+      {m.dealPrefill ? (
+        <DealDialog
+          open={creatingDeal}
+          onClose={() => setCreatingDeal(false)}
+          prefill={{
+            name: m.dealPrefill.name,
+            contact:
+              m.contact && m.dealPrefill.contactId
+                ? {
+                    id: m.dealPrefill.contactId,
+                    name: contactLabel ?? m.contact.email,
+                    email: m.contact.email,
+                  }
+                : null,
+            company:
+              m.company && m.dealPrefill.companyId
+                ? { id: m.dealPrefill.companyId, name: m.company.name }
+                : null,
+          }}
+          onCreated={(deal) => {
+            toast(`Deal “${deal.name}” created`);
+            router.push(`/app/deals/${deal.id}`);
+          }}
+        />
+      ) : null}
     </Card>
   );
 }

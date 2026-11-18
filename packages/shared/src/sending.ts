@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { PasswordSchema } from "./api";
 import type { ContactComplianceSummaryDto } from "./compliance";
+import { isKnownCurrency } from "./deals";
 
 // ------------------------------------------------------------------ account email flows
 
@@ -28,6 +29,13 @@ export const WorkspaceSettingsInputSchema = z.object({
   /** Physical postal address, printed in every outreach email (CAN-SPAM). */
   mailingAddress: z.string().trim().min(10, "Enter a full postal address").max(300).optional(),
   defaultTimeZone: z.string().trim().max(64).optional(),
+  /** Default currency for new deals (ISO 4217, OL-E7). */
+  currency: z
+    .string()
+    .trim()
+    .transform((v) => v.toUpperCase())
+    .refine((v) => isKnownCurrency(v), { message: "Use an ISO 4217 currency code like USD" })
+    .optional(),
 });
 
 export interface WorkspaceSettingsDto {
@@ -35,6 +43,8 @@ export interface WorkspaceSettingsDto {
   name: string;
   mailingAddress: string | null;
   defaultTimeZone: string;
+  /** Default currency for new deals (ISO 4217). */
+  currency: string;
 }
 
 // ------------------------------------------------------------------ mailboxes

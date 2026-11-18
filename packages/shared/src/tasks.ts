@@ -27,6 +27,8 @@ export const TaskQuerySchema = z.object({
   status: z.enum(TASK_STATUSES).default("open"),
   due: z.enum(TASK_DUE_FILTERS).default("any"),
   contactId: z.string().uuid().optional(),
+  /** Tasks linked to this deal (OL-E7). */
+  dealId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 export type TaskQuery = z.infer<typeof TaskQuerySchema>;
@@ -42,6 +44,8 @@ export const CreateTaskInputSchema = z
     kind: z.enum(TASK_KINDS).default("other"),
     contactId: z.string().uuid().optional(),
     companyId: z.string().uuid().optional(),
+    /** Link the task to a deal (OL-E7). */
+    dealId: z.string().uuid().optional(),
     /** Managers and above may assign to a teammate; reps only to themselves. */
     ownerId: z.string().uuid().optional(),
   })
@@ -55,6 +59,7 @@ export const UpdateTaskInputSchema = z
     dueAt: isoDateTime.nullable().optional(),
     kind: z.enum(TASK_KINDS).optional(),
     contactId: z.string().uuid().nullable().optional(),
+    dealId: z.string().uuid().nullable().optional(),
     ownerId: z.string().uuid().optional(),
     /** false = hide the "Looks like you sent it — mark done?" suggestion. */
     suggestDone: z.literal(false).optional(),
@@ -68,6 +73,8 @@ export interface TaskDto {
   owner: { id: string; name: string };
   contact: { id: string; email: string; firstName: string | null; lastName: string | null } | null;
   companyId: string | null;
+  /** The deal this task is linked to (OL-E7). */
+  dealId: string | null;
   title: string;
   notes: string | null;
   dueAt: string | null;

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval": "tsc -p tsconfig.build.json && node eval/run.mjs",
-    "eval:promises": "tsc -p tsconfig.build.json && node eval/promises.mjs"
+    "eval:promises": "tsc -p tsconfig.build.json && node eval/promises.mjs",
+    "eval:reality": "tsc -p tsconfig.build.json && node eval/reality.mjs"
   },
   "devDependencies": {
     "@openline/config": "workspace:*",

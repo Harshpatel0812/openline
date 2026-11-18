@@ -412,3 +412,143 @@ same order: `unsubscribed` / `bounced` / `contact_archived` → `suppressed` →
 check's detail in `lastError`) → `mailing_address_missing` (defers 1 h) → mailbox checks →
 `outside_send_window`. Enroll keeps its skip reasons and order; compliance skips (`unsubscribed`,
 `bounced`, `suppressed`, `no_consent`) now carry `compliance: { decision, nextAllowedAt?, check }`.
+
+# Sprint 6 additions
+
+## Pipeline and deals (OL-E7 §1–3)
+
+Types and schemas: `packages/shared/src/deals.ts` (migration 0011). One pipeline per workspace.
+Every role reads every deal; reps change only deals they own (someone else's deal: 403
+`forbidden`), managers and above change all; another workspace's deal, stage, contact or company is 404. Money is integer minor units: `amountMinor` (≤ 999 999 999 999) + ISO 4217 `currency`
+(defaults to the new workspace setting `currency`, `PATCH /v1/workspace { currency }`, default
+`USD`). Dates (`expectedCloseDate`, `nextStepDate`) are `YYYY-MM-DD`.
+
+| Method + path                 | Who                              | Body / query                                                                                                                                                                                              | Response                                                                                                                                                                      |
+| ----------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/pipeline/stages`     | all                              | —                                                                                                                                                                                                         | `PipelineStageDto[]` in board order (`dealCount` each)                                                                                                                        |
+| `PUT /v1/pipeline/stages`     | owner, admin                     | `{ stages: [{ id?, name (≤40), probability 0–100, kind open\|won\|lost, staleAfterDays (1–365 \| null, default 14), entryCriteria ≤5 [{ label, evidence }] }] }`                                          | Array order = board order; stages left out are archived · 400 duplicate names, not exactly one won + one lost, open stages not first · 404 unknown id · 409 `stage_has_deals` |
+| `GET /v1/deals`               | all                              | `?stageId=&ownerId=<id>\|me&contactId=&companyId=&status=open\|won\|lost\|all&stale=1\|0&flagged=1\|0&closeFrom=&closeTo=&q=&cursor=&limit=` (≤500, def 200)                                              | `{ items: DealDto[], nextCursor }` newest first                                                                                                                               |
+| `GET /v1/deals/summary`       | all                              | `?ownerId=<id>\|me`                                                                                                                                                                                       | `DealSummaryDto`: per-stage `columns` and `forecast { open, thisMonth, thisQuarter }`                                                                                         |
+| `GET /v1/deals/attention`     | all (`mine=0`: manager+)         | `?mine=1\|0&limit=` (≤100)                                                                                                                                                                                | `{ items: DealDto[] }` open deals that are stale or past their next-step date, oldest activity first (Today)                                                                  |
+| `POST /v1/deals`              | all (`ownerId` ≠ self: manager+) | `{ name (≤120), companyId?, primaryContactId?, contactIds? (≤20 incl. primary), ownerId?, stageId? (open; default first), amountMinor?, currency?, expectedCloseDate?, nextStep? (≤200), nextStepDate? }` | 201 `DealDetailDto` · 400 `stage_closed` · 404 contact/company/stage/member                                                                                                   |
+| `GET /v1/deals/:id`           | all                              | —                                                                                                                                                                                                         | `DealDetailDto` (+ `contacts`, `stageHistory`)                                                                                                                                |
+| `PATCH /v1/deals/:id`         | owner of the deal, manager+      | any create field except `stageId`; `ownerId` manager+; `contactIds` replaces the set; `lostReason` only while lost                                                                                        | `DealDetailDto` · 409 `deal_not_lost`                                                                                                                                         |
+| `POST /v1/deals/:id/move`     | owner of the deal, manager+      | `{ stageId, lostReason? }`                                                                                                                                                                                | 200 `DealDetailDto` · 400 `lost_reason_required` · same stage = no-op                                                                                                         |
+| `GET /v1/deals/:id/timeline`  | all                              | —                                                                                                                                                                                                         | `{ items: DealTimelineItemDto[] }` newest first (≤200): `email`, `stage_change`, `task`, `edit`                                                                               |
+| `GET /v1/contacts/:id/deals`  | all                              | —                                                                                                                                                                                                         | `DealDto[]` (the contact is on the deal) · 404                                                                                                                                |
+| `GET /v1/companies/:id/deals` | all                              | —                                                                                                                                                                                                         | `DealDto[]` · 404                                                                                                                                                             |
+
+**Rules.** Moving to the won or lost stage sets `closedAt` (lost needs `lostReason`); moving back
+to an open stage clears `closedAt` and `lostReason`. Each move adds a `deal_stage_history` row
+(append-only; creation is the first row, `from: null`) and an audit record. Stages with deals can't
+be archived or change kind. New workspaces get Discovery 10 %, Qualified 25 %, Proposal 50 %,
+Negotiation 75 %, Won 100 %, Lost 0 %.
+
+**Activity and flags on `DealDto`.** `lastActivityAt` = latest of: deal created/edited, stage
+change, a task on the deal completed, and any email (sent or received; not an unsent reservation)
+with any of the deal's contacts — the email part is read from `messages` at query time.
+`isStale`: open and `now − lastActivityAt` strictly greater than the stage's `staleAfterDays` × 24 h
+(exact hours: the SQL filters use `n * interval '24 hours'`, so a DST change in the database
+session's time zone doesn't move the line).
+`nextStepOverdue` / `closeDateOverdue`: open and the date is before today in the workspace time
+zone (not on the day itself). `missingNextStep`: open, past the first open stage, no next step.
+`flagged=1` = any of these four not dismissed in the Reality Check panel since the latest activity
+(codes `stale`, `next_step_overdue`, `close_date_passed`, `no_next_step`), or an undismissed model
+flag (`criterion_missing`, `stage_ahead_of_evidence`) of the deal's latest Reality Check that had
+model evidence, while the deal is still in the stage it was checked in (a later deterministic-only
+run doesn't clear them). `flagCount` counts the same. The four booleans themselves stay as they are
+(a dismissed `stale` deal still has `isStale: true`).
+`canEdit` tells the UI whether the caller may edit/move.
+
+**Summary math.** Per stage and per forecast bucket: `count` (all deals), and per currency
+`amountMinor` and `weightedMinor` = round half up of Σ(amount × probability) / 100, rounded once
+per bucket (not per deal). Top-level `amountMinor` / `weightedMinor` are in the workspace currency
+only; other currencies are listed in `byCurrency` (no conversion) and `multiCurrency: true`.
+`thisMonth` / `thisQuarter`: open deals whose `expectedCloseDate` falls in the current calendar
+month / quarter of the workspace time zone.
+
+**Timeline visibility (same rule as the inbox).** Managers and above see every email's subject,
+direction, date and inbound `snippet` (≤200, plain text). A rep sees those for emails in their own
+mailboxes; for an email in a teammate's mailbox only `direction` and `at`, with `subject: null`,
+`snippet: null` and `teammateMailbox: true` (the UI shows "Email (in a teammate's mailbox)").
+Outbound bodies aren't stored (`snippet: null`). Task titles only for the task's owner and managers.
+
+**Related changes.** Tasks: `dealId` on create/update/`TaskDto`, `GET /v1/tasks?dealId=`. Linking
+a task to a deal (create, or changing `dealId` on update) needs edit rights on the deal (its owner or
+manager+), else 403 `forbidden`; completing a linked task counts as deal activity only when the
+task's owner can edit the deal.
+Inbox: `InboxMessageDto.dealPrefill { name: "<Company> — new deal", contactId, companyId,
+openDeals }` for "Create deal". Audit: `deal.created|updated|moved` (ids, kinds, field names; never
+names, next steps or reasons), `pipeline.stages_updated` (counts).
+
+## Pipeline Reality Check (OL-E7 §4)
+
+Types and schemas: `packages/shared/src/reality.ts` (migration 0013). Runner:
+`packages/replies/src/reality.ts` (`createRealityChecker`, shared by the API and the worker);
+evidence + rules: `packages/ai/src/reality.ts`.
+
+| Method + path                                            | Who                         | Body                 | Response                                                                                                                                     |
+| -------------------------------------------------------- | --------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/deals/:id/reality-check`                       | owner of the deal, manager+ | —                    | 200 `RealityCheckDto` · 429 `rate_limited` (10 manual runs per deal per UTC day; 60 per person per hour, `REALITY_CHECKS_PER_USER_PER_HOUR`) |
+| `GET /v1/deals/:id/reality-check`                        | all                         | —                    | `{ check: RealityCheckDto \| null }` (latest run)                                                                                            |
+| `POST /v1/deals/:id/reality-check/flags/:flagId/dismiss` | owner of the deal, manager+ | `{ reason (1–300) }` | 200 `RealityCheckDto` · 400 bad id/reason · 404 flag not in the latest check                                                                 |
+| `POST /v1/deals/:id/reality-check/suggestion/accept`     | owner of the deal, manager+ | —                    | 200 `{ deal: DealDetailDto, check }` · 404 no open suggestion · 409 `suggestion_stale`                                                       |
+| `POST /v1/deals/:id/reality-check/suggestion/dismiss`    | owner of the deal, manager+ | `{ reason? (≤300) }` | 200 `RealityCheckDto` · 404 no open suggestion                                                                                               |
+
+Another workspace's deal is 404 everywhere; someone else's deal for a rep is 403 (`forbidden`).
+
+**A run.** Evidence = emails (both directions; bodies exist for inbound only, quoted history
+trimmed) with the deal's contacts from the last 90 days (newest 30, ≤ 30k characters), the
+contacts' names and job titles and the deal's next step, all fenced as untrusted. The small model
+answers per evidence type; code keeps a `yes` or a `no` only with a quote that is verbatim
+(whitespace-normalised, 8–300 characters) in the message it names, otherwise the type is `unclear`
+(so an email can't raise a flag without words code can find in it). `assessDeal` (code) then
+computes the evidence stage and flags: `criterion_missing`, `stage_ahead_of_evidence` (model) and
+`next_step_overdue`, `no_next_step`, `close_date_passed`, `stale` (deterministic). Won/lost deals
+get no flags and no model call.
+
+**Deterministic only** (`deterministicOnly: true`, `deterministicReason`): `scout_off`,
+`no_provider` (AI_PROVIDER=off), `budget` (the run's worst case doesn't fit in the month's credits
+or in 25 % of them, counting spend and other running checks' reservations), `no_emails`,
+`model_error` (failed or invalid twice; never an error response). Spend is recorded in `ai_usage`
+as feature `reality_check`. A deterministic-only run leaves the open suggestion as it is.
+
+**Concurrency.** A run first locks the deal row and, under a per-workspace advisory lock, checks
+the budget and inserts its `deal_checks` row as `pending` with the worst-case credits of the model
+step reserved (every attempt, one token per byte of prompt, full output cap). Concurrent "Check
+now" requests and scheduled runs therefore count each other in the daily limit and the budget. The
+row becomes `done` when the run finishes (`failed` if it throws; the run still counts toward the
+daily limit). Only `done` rows are returned.
+
+**Stored.** One `deal_checks` row per run (append-only once `done`): evidence (`present`, quote ≤ 300,
+messageId — no other email text), all flags, evidence stage, the deal's stage at the time, model,
+tokens, trigger (`manual` | `scheduled`). Flag ids are stable per code + criterion.
+
+**Quotes are private like the timeline.** A quote is returned only if its message is still on the
+deal and the caller is a manager+ or owns the mailbox it came through; otherwise the item carries
+`quoteHidden: true` (and `messageId`) without the words. Evidence `present` (yes / no / unclear)
+and the flags stay visible to every rep even when they rest only on a teammate's mail: they say
+what the pipeline needs, not what the email said (product decision, Sprint 6). Deleting an inbound
+email — e.g. with its contact — removes quotes taken from it from every stored check (trigger
+`messages_scrub_deal_check_quotes`, 0013); the `present` value stays.
+
+**Dismissals.** "Not right — …" stores a `deal_flag_dismissals` row (append-only, feeds the
+evaluation set); the flag comes back with `dismissed { reason, at, by }` and drops out of
+`flagged` / `flagCount` (and the board's flag icon) until there is activity on the deal after the
+dismissal — model and deterministic flags alike. Dismissing
+`stage_ahead_of_evidence` also withdraws the suggestion. Audit: `deal.reality_flag_dismissed` (flag
+id + code, no reason text).
+
+**Suggestion.** "Move to <evidence stage>" is an `ai_actions` row of kind `deal_stage_move`
+(owner = the deal's owner), at most one open per deal: refreshed when a new run suggests the same
+move, replaced (old one `rejected`, superseded) when it suggests another, closed when it suggests
+none. Accept = proposed → executed in one transaction through the normal move (history row,
+`deal.moved` audit with `viaRealityCheck: true`, plus `ai.stage_move_accepted`); if the deal moved
+since the check it is 409 `suggestion_stale`, and that suggestion is left closed (superseded); the
+panel reloads the check. A dismissed move (`ai.stage_move_dismissed`) isn't
+proposed again until there is new activity. Nothing ever moves on its own.
+
+**Schedule.** The worker (and the API with `RUN_SCHEDULER=true`) polls every 5 minutes;
+`claim_due_reality_checks(batch)` (openline_scheduler, ids and timestamps only, 10-minute lease)
+returns open deals not checked in the last 24 h (manual runs count) that have activity since their
+last check. Same budget gate as above; one failing deal never stops the batch or other jobs.

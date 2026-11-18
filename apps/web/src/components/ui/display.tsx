@@ -121,7 +121,7 @@ export function Table({
   children: ReactNode;
 }) {
   return (
-    <div className={cx("w-full overflow-x-auto", className)}>
+    <div className={cx("relative w-full overflow-x-auto", className)}>
       <table className="w-full min-w-[640px] border-collapse text-left text-sm">
         {caption ? <caption className="sr-only">{caption}</caption> : null}
         {children}

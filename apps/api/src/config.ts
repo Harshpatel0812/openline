@@ -72,6 +72,8 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
   SCOUT_DRAFTS_PER_USER_PER_HOUR: z.coerce.number().int().positive().default(30),
+  /** Reality Check "Check now" runs per person per hour, across deals (on top of 10/deal/day). */
+  REALITY_CHECKS_PER_USER_PER_HOUR: z.coerce.number().int().positive().default(60),
 
   // ---------------------------------------------------------------- OL-E5: public website
   /** Where website contact-form enquiries are emailed. Required in staging and production. */
@@ -120,6 +122,7 @@ export interface ScoutAiConfig {
   anthropicApiKey?: string;
   timeoutMs: number;
   draftsPerUserPerHour: number;
+  realityChecksPerUserPerHour: number;
   /** Website research may reach private/loopback hosts: development and test only. */
   allowPrivateResearchHosts: boolean;
 }
@@ -158,6 +161,7 @@ export function resolveAiConfig(parsed: Env, appEnv: AppEnv): ScoutAiConfig {
     anthropicApiKey: provider === "anthropic" ? parsed.ANTHROPIC_API_KEY : undefined,
     timeoutMs: parsed.AI_TIMEOUT_MS,
     draftsPerUserPerHour: parsed.SCOUT_DRAFTS_PER_USER_PER_HOUR,
+    realityChecksPerUserPerHour: parsed.REALITY_CHECKS_PER_USER_PER_HOUR,
     allowPrivateResearchHosts: devOrTest,
   };
 }

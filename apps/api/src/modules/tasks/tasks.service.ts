@@ -5,6 +5,7 @@ import {
   asc,
   companies,
   contacts,
+  deals,
   eq,
   isNull,
   sql,
@@ -30,6 +31,7 @@ import type { AuthContext } from "../../common/auth-context";
 import { ApiException, forbidden, notFound } from "../../common/http";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
+import { touchDealActivity } from "../deals/deals.service";
 
 /** Managers and above see and edit everyone's tasks; reps only their own. */
 export const MANAGERS = new Set(["owner", "admin", "manager"]);
@@ -83,6 +85,7 @@ export function toTaskDto(row: TaskWithRefs, now = new Date()): TaskDto {
           }
         : null,
     companyId: t.companyId,
+    dealId: t.dealId,
     title: t.title,
     notes: t.notes,
     dueAt: t.dueAt?.toISOString() ?? null,
@@ -188,6 +191,7 @@ export class TasksService {
             eq(tasks.status, query.status),
             this.dueFilter(query.due, w),
             query.contactId ? eq(tasks.contactId, query.contactId) : undefined,
+            query.dealId ? eq(tasks.dealId, query.dealId) : undefined,
           ),
         )
         .orderBy(sql`${tasks.dueAt} ASC NULLS LAST`, asc(tasks.createdAt))
@@ -275,12 +279,43 @@ export class TasksService {
     return contact;
   }
 
+  /**
+   * A deal to link a task to: in this workspace, and one the caller may edit (its owner or a
+   * manager). Linking makes the task's completion count as deal activity (SEC-L2).
+   */
+  private async dealRef(tx: Tx, auth: AuthContext, dealId: string) {
+    const [deal] = await tx
+      .select({ id: deals.id, companyId: deals.companyId, ownerId: deals.ownerId })
+      .from(deals)
+      .where(and(eq(deals.id, dealId), eq(deals.workspaceId, auth.workspaceId)));
+    if (!deal) throw notFound("Deal");
+    if (deal.ownerId !== auth.userId && !MANAGERS.has(auth.role)) {
+      throw forbidden("Only the deal's owner or a manager can link tasks to it");
+    }
+    return deal;
+  }
+
+  /** May this user (by their role in the workspace) edit the deal? */
+  private async ownerCanEditDeal(tx: Tx, workspaceId: string, userId: string, dealId: string) {
+    const [row] = await tx
+      .select({ ownerId: deals.ownerId, role: workspaceMembers.role })
+      .from(deals)
+      .leftJoin(
+        workspaceMembers,
+        and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)),
+      )
+      .where(and(eq(deals.id, dealId), eq(deals.workspaceId, workspaceId)));
+    if (!row) return false;
+    return row.ownerId === userId || (!!row.role && MANAGERS.has(row.role));
+  }
+
   create(auth: AuthContext, input: CreateTaskInput): Promise<TaskDto> {
     return this.scope(auth, async (tx) => {
       const ownerId = input.ownerId ?? auth.userId;
       await this.assertOwner(tx, auth, ownerId);
       const contact = input.contactId ? await this.contactRef(tx, auth, input.contactId) : null;
-      let companyId = contact?.companyId ?? null;
+      const deal = input.dealId ? await this.dealRef(tx, auth, input.dealId) : null;
+      let companyId = contact?.companyId ?? deal?.companyId ?? null;
       if (input.companyId) {
         const [company] = await tx
           .select({ id: companies.id })
@@ -298,6 +333,7 @@ export class TasksService {
           ownerId,
           contactId: contact?.id ?? null,
           companyId,
+          dealId: deal?.id ?? null,
           title: input.title,
           notes: input.notes || null,
           dueAt: input.dueAt ? new Date(input.dueAt) : null,
@@ -317,6 +353,7 @@ export class TasksService {
           source: "manual",
           hasDueDate: row!.dueAt !== null,
           assigned: ownerId !== auth.userId,
+          hasDeal: deal !== null,
         },
       });
       return this.dto(tx, auth, row!.id);
@@ -346,6 +383,10 @@ export class TasksService {
         const contact = input.contactId ? await this.contactRef(tx, auth, input.contactId) : null;
         patch.contactId = contact?.id ?? null;
         patch.companyId = contact?.companyId ?? null;
+      }
+      // Re-sending the current link (e.g. a form saving every field) needs no edit rights.
+      if (input.dealId !== undefined && input.dealId !== task.dealId) {
+        patch.dealId = input.dealId ? (await this.dealRef(tx, auth, input.dealId)).id : null;
       }
       if (input.suggestDone === false) {
         patch.suggestDoneAt = null;
@@ -386,6 +427,15 @@ export class TasksService {
         .returning({ id: tasks.id });
       if (!updated) {
         throw new ApiException(HttpStatus.CONFLICT, "task_closed", "This task was just closed.");
+      }
+      // A task completed on a deal counts as deal activity (OL-E7) — only when the task's owner
+      // could edit the deal themselves, so nobody can keep someone else's deal "fresh" (SEC-L2).
+      if (
+        status === "done" &&
+        task.dealId &&
+        (await this.ownerCanEditDeal(tx, auth.workspaceId, task.ownerId, task.dealId))
+      ) {
+        await touchDealActivity(tx, auth.workspaceId, task.dealId, now);
       }
       await this.audit.record(tx, {
         workspaceId: auth.workspaceId,

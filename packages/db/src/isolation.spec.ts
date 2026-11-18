@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabase, type DatabaseHandle } from "./client";
-import { migrate } from "./migrate";
+import { migrate, MIGRATIONS_DIR } from "./migrate";
+import { DEFAULT_STAGES, seedDefaultStages } from "./pipeline";
 import {
+  companies,
   contacts,
   enrollments,
   mailboxes,
@@ -13,8 +18,10 @@ import {
   workspaceMembers,
   workspaces,
 } from "./schema";
-import { withIdentity, withTenant } from "./tenant";
+import { withIdentity, withTenant, type Tx } from "./tenant";
 import { aiActions, aiUsage, tasks, websiteCache } from "./schema";
+import { dealContacts, deals, dealStageHistory, pipelineStages } from "./schema";
+import { dealChecks, dealFlagDismissals } from "./schema";
 
 /**
  * The most important test in the codebase: one workspace can never read or write
@@ -580,5 +587,711 @@ describe("tenant isolation: tasks and promise proposals (0009)", () => {
     });
     const a = await withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.select().from(tasks));
     expect(a).toHaveLength(1);
+  });
+});
+
+/** Pipeline (0011): stages, deals, deal contacts, append-only stage history — per workspace. */
+describe("tenant isolation: pipeline and deals (0011)", () => {
+  let handle: DatabaseHandle;
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  let user = "";
+  const stageOf: Record<string, string> = {};
+  const wonOf: Record<string, string> = {};
+  const dealOf: Record<string, string> = {};
+  const contactOf: Record<string, string> = {};
+
+  beforeAll(async () => {
+    handle = createDatabase(process.env.TEST_DATABASE_URL ?? "pglite://memory");
+    await migrate(handle);
+    user = await withIdentity(handle.db, async (tx) => {
+      const [u] = await tx
+        .insert(users)
+        .values({ email: `p-${randomUUID()}@a.com`, name: "P", passwordHash: "x" })
+        .returning();
+      return u!.id;
+    });
+    for (const ws of [wsA, wsB]) {
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+        expect(await seedDefaultStages(tx, ws)).toBe(true);
+        expect(await seedDefaultStages(tx, ws)).toBe(false);
+        const stages = await tx.select().from(pipelineStages);
+        stageOf[ws] = stages.find((s) => s.position === 0)!.id;
+        wonOf[ws] = stages.find((s) => s.kind === "won")!.id;
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `lead@${ws.slice(0, 8)}.com` })
+          .returning();
+        contactOf[ws] = c!.id;
+        const [d] = await tx
+          .insert(deals)
+          .values({
+            workspaceId: ws,
+            name: "Deal",
+            ownerId: user,
+            stageId: stageOf[ws]!,
+            currency: "USD",
+            amountMinor: 1000,
+          })
+          .returning();
+        dealOf[ws] = d!.id;
+        await tx.insert(dealContacts).values({ workspaceId: ws, dealId: d!.id, contactId: c!.id });
+        await tx
+          .insert(dealStageHistory)
+          .values({ workspaceId: ws, dealId: d!.id, toStageId: stageOf[ws]! });
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  it("each workspace sees only its own pipeline rows; none without a workspace", async () => {
+    for (const table of [pipelineStages, deals, dealContacts, dealStageHistory]) {
+      const a = await withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.select().from(table));
+      expect(a.length).toBeGreaterThan(0);
+      expect(a.every((r) => r.workspaceId === wsA)).toBe(true);
+      expect(await withIdentity(handle.db, (tx) => tx.select().from(table))).toHaveLength(0);
+    }
+  });
+
+  it("refuses inserts into another workspace", async () => {
+    const attempts = [
+      (tx: Tx) =>
+        tx.insert(pipelineStages).values({
+          workspaceId: wsB,
+          name: "Sneaky",
+          position: 9,
+          probability: 1,
+        }),
+      (tx: Tx) =>
+        tx.insert(deals).values({
+          workspaceId: wsB,
+          name: "Sneaky",
+          ownerId: user,
+          stageId: stageOf[wsB]!,
+          currency: "USD",
+        }),
+      (tx: Tx) =>
+        tx
+          .insert(dealContacts)
+          .values({ workspaceId: wsB, dealId: dealOf[wsB]!, contactId: contactOf[wsA]! }),
+      (tx: Tx) =>
+        tx
+          .insert(dealStageHistory)
+          .values({ workspaceId: wsB, dealId: dealOf[wsB]!, toStageId: stageOf[wsB]! }),
+    ];
+    for (const attempt of attempts) {
+      await expect(withTenant(handle.db, { workspaceId: wsA }, attempt)).rejects.toThrow();
+    }
+  });
+
+  it("a deal can't point at another workspace's stage (composite foreign key)", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(deals).values({
+          workspaceId: wsA,
+          name: "Cross",
+          ownerId: user,
+          stageId: stageOf[wsB]!,
+          currency: "USD",
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx
+          .update(deals)
+          .set({ stageId: stageOf[wsB]! })
+          .where(sql`id = ${dealOf[wsA]!}`),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("can't update another workspace's stages or deals", async () => {
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      await tx
+        .update(pipelineStages)
+        .set({ name: "hacked" })
+        .where(sql`workspace_id = ${wsB}`);
+      await tx
+        .update(deals)
+        .set({ name: "hacked" })
+        .where(sql`id = ${dealOf[wsB]!}`);
+    });
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      expect((await tx.select().from(pipelineStages)).map((s) => s.name)).not.toContain("hacked");
+      expect((await tx.select().from(deals))[0]!.name).toBe("Deal");
+    });
+  });
+
+  it("stage history is append-only; stages and deals can't be deleted by the app", async () => {
+    for (const statement of [
+      sql`UPDATE deal_stage_history SET moved_at = now()`,
+      sql`DELETE FROM deal_stage_history`,
+      sql`DELETE FROM pipeline_stages`,
+      sql`DELETE FROM deals`,
+    ]) {
+      await expect(
+        withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.execute(statement)),
+      ).rejects.toThrow();
+    }
+  });
+
+  it("one active won and one active lost stage; money and currency are checked", async () => {
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx
+          .insert(pipelineStages)
+          .values({ workspaceId: wsA, name: "Won 2", position: 9, probability: 100, kind: "won" }),
+      ),
+    ).rejects.toThrow();
+    // Archived won stages don't count.
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      await tx.insert(pipelineStages).values({
+        workspaceId: wsA,
+        name: "Old won",
+        position: 9,
+        probability: 100,
+        kind: "won",
+        archivedAt: new Date(),
+      });
+    });
+    for (const values of [
+      { amountMinor: -1 },
+      { amountMinor: 1_000_000_000_000 },
+      { currency: "usd" },
+    ]) {
+      await expect(
+        withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+          tx
+            .update(deals)
+            .set(values)
+            .where(sql`id = ${dealOf[wsA]!}`),
+        ),
+      ).rejects.toThrow();
+    }
+    expect(wonOf[wsA]).toBeTruthy();
+  });
+
+  it("deals, deal contacts and tasks can't point at another workspace's company, contact or deal (SEC-L3)", async () => {
+    const companyB = await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      const [c] = await tx
+        .insert(companies)
+        .values({ workspaceId: wsB, name: "B Co", domain: `b-${randomUUID()}.com` })
+        .returning();
+      return c!.id;
+    });
+    const contactA2 = await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      const [c] = await tx
+        .insert(contacts)
+        .values({ workspaceId: wsA, email: `second-${randomUUID()}@a.com` })
+        .returning();
+      return c!.id;
+    });
+    const attempts = [
+      (tx: Tx) =>
+        tx.insert(deals).values({
+          workspaceId: wsA,
+          name: "Cross company",
+          ownerId: user,
+          stageId: stageOf[wsA]!,
+          currency: "USD",
+          companyId: companyB,
+        }),
+      (tx: Tx) =>
+        tx
+          .update(deals)
+          .set({ primaryContactId: contactOf[wsB]! })
+          .where(sql`id = ${dealOf[wsA]!}`),
+      (tx: Tx) =>
+        tx
+          .update(deals)
+          .set({ companyId: companyB })
+          .where(sql`id = ${dealOf[wsA]!}`),
+      (tx: Tx) =>
+        tx
+          .insert(dealContacts)
+          .values({ workspaceId: wsA, dealId: dealOf[wsA]!, contactId: contactOf[wsB]! }),
+      (tx: Tx) =>
+        tx.insert(tasks).values({
+          workspaceId: wsA,
+          ownerId: user,
+          title: "Cross deal",
+          dealId: dealOf[wsB]!,
+        }),
+    ];
+    for (const attempt of attempts) {
+      await expect(withTenant(handle.db, { workspaceId: wsA }, attempt)).rejects.toThrow();
+    }
+    // Same-workspace links still work, and deleting the target clears only the link.
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      await tx
+        .update(deals)
+        .set({ companyId: companyB })
+        .where(sql`id = ${dealOf[wsB]!}`);
+      await tx.insert(tasks).values({
+        workspaceId: wsB,
+        ownerId: user,
+        title: "On the deal",
+        dealId: dealOf[wsB]!,
+      });
+      await tx.delete(companies).where(sql`id = ${companyB}`);
+      const [d] = await tx.select().from(deals);
+      expect(d).toMatchObject({ companyId: null, workspaceId: wsB });
+      const [t] = await tx.select().from(tasks);
+      expect(t!.dealId).toBe(dealOf[wsB]);
+    });
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      await tx
+        .insert(dealContacts)
+        .values({ workspaceId: wsA, dealId: dealOf[wsA]!, contactId: contactA2 });
+      await tx.delete(contacts).where(sql`id = ${contactA2}`);
+      expect(await tx.select().from(dealContacts)).toHaveLength(1);
+    });
+  });
+
+  it("deleting a deal clears tasks' link to it, not the task (SEC-L3, ON DELETE SET NULL (deal_id))", async () => {
+    const ws = randomUUID();
+    const dealId = await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+      await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+      await seedDefaultStages(tx, ws);
+      const [stage] = await tx.select().from(pipelineStages);
+      const [d] = await tx
+        .insert(deals)
+        .values({
+          workspaceId: ws,
+          name: "Gone",
+          ownerId: user,
+          stageId: stage!.id,
+          currency: "USD",
+        })
+        .returning();
+      await tx
+        .insert(tasks)
+        .values({ workspaceId: ws, ownerId: user, title: "Keep", dealId: d!.id });
+      return d!.id;
+    });
+    // The app can't delete deals; the table owner (e.g. a future admin job) can.
+    await handle.db.execute(sql`DELETE FROM deals WHERE id = ${dealId}`);
+    const [t] = await withTenant(handle.db, { workspaceId: ws }, (tx) => tx.select().from(tasks));
+    expect(t).toMatchObject({ title: "Keep", dealId: null, workspaceId: ws });
+  });
+
+  it("deleting a contact removes them from deals and clears the primary contact", async () => {
+    await withTenant(handle.db, { workspaceId: wsB }, async (tx) => {
+      await tx
+        .update(deals)
+        .set({ primaryContactId: contactOf[wsB]! })
+        .where(sql`id = ${dealOf[wsB]!}`);
+      await tx.delete(contacts).where(sql`id = ${contactOf[wsB]!}`);
+      expect(await tx.select().from(dealContacts)).toHaveLength(0);
+      expect((await tx.select().from(deals))[0]!.primaryContactId).toBeNull();
+    });
+    const a = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.select().from(dealContacts),
+    );
+    expect(a).toHaveLength(1);
+  });
+
+  it("0011 seeds default stages for workspaces that existed before it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openline-mig-"));
+    try {
+      for (const f of readdirSync(MIGRATIONS_DIR).filter((f) => f < "0011")) {
+        copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+      }
+      const old = createDatabase("pglite://memory");
+      try {
+        await migrate(old, dir);
+        const ws = randomUUID();
+        // Raw SQL: the Drizzle schema already has 0011's columns.
+        await withTenant(old.db, { workspaceId: ws }, (tx) =>
+          tx.execute(
+            sql`INSERT INTO workspaces (id, name, trial_ends_at) VALUES (${ws}, 'Before', now())`,
+          ),
+        );
+        expect(await migrate(old)).toContain("0011_pipeline.sql");
+        const stages = await withTenant(old.db, { workspaceId: ws }, (tx) =>
+          tx.select().from(pipelineStages).orderBy(pipelineStages.position),
+        );
+        expect(stages.map((s) => [s.name, s.probability, s.kind])).toEqual(
+          DEFAULT_STAGES.map((s) => [s.name, s.probability, s.kind]),
+        );
+        expect(stages.map((s) => s.entryCriteria)).toEqual(
+          DEFAULT_STAGES.map((s) => s.entryCriteria),
+        );
+        const [w] = await withTenant(old.db, { workspaceId: ws }, (tx) =>
+          tx.select().from(workspaces),
+        );
+        expect(w!.currency).toBe("USD");
+      } finally {
+        await old.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Reality Check (0013): deal checks, flag dismissals, stage-move proposals, scheduler claim. */
+describe("tenant isolation: reality check (0013)", () => {
+  let handle: DatabaseHandle;
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  let user = "";
+  const dealOf: Record<string, string> = {};
+  const stageOf: Record<string, string> = {};
+  const wonOf: Record<string, string> = {};
+
+  // Only this suite's workspaces: on a shared real Postgres (TEST_DATABASE_URL) other suites'
+  // deals are due too.
+  const claim = () =>
+    withIdentity(handle.db, (tx) =>
+      tx.execute(sql`SELECT * FROM claim_due_reality_checks(50)`),
+    ).then((r) =>
+      (r as unknown as { rows: { workspace_id: string; deal_id: string }[] }).rows.filter(
+        (row) => row.workspace_id === wsA || row.workspace_id === wsB,
+      ),
+    );
+
+  beforeAll(async () => {
+    handle = createDatabase(process.env.TEST_DATABASE_URL ?? "pglite://memory");
+    await migrate(handle);
+    user = await withIdentity(handle.db, async (tx) => {
+      const [u] = await tx
+        .insert(users)
+        .values({ email: `r-${randomUUID()}@a.com`, name: "R", passwordHash: "x" })
+        .returning();
+      return u!.id;
+    });
+    for (const ws of [wsA, wsB]) {
+      await withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        await tx.insert(workspaces).values({ id: ws, name: ws, trialEndsAt: new Date() });
+        await seedDefaultStages(tx, ws);
+        const stages = await tx.select().from(pipelineStages);
+        stageOf[ws] = stages.find((s) => s.position === 1)!.id;
+        wonOf[ws] = stages.find((s) => s.kind === "won")!.id;
+        const [d] = await tx
+          .insert(deals)
+          .values({
+            workspaceId: ws,
+            name: "Deal",
+            ownerId: user,
+            stageId: stageOf[ws]!,
+            currency: "USD",
+          })
+          .returning();
+        dealOf[ws] = d!.id;
+        await tx.insert(dealChecks).values({
+          workspaceId: ws,
+          dealId: d!.id,
+          stageId: stageOf[ws]!,
+          evidence: { budget_discussed: { present: "no" } },
+          flags: [],
+        });
+        await tx.insert(dealFlagDismissals).values({
+          workspaceId: ws,
+          dealId: d!.id,
+          flagId: "0123456789abcdef",
+          code: "stale",
+          reason: "We spoke on a call",
+          dismissedBy: user,
+        });
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  it("each workspace sees only its own checks and dismissals; none without a workspace", async () => {
+    for (const table of [dealChecks, dealFlagDismissals]) {
+      const a = await withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.select().from(table));
+      expect(a).toHaveLength(1);
+      expect(a[0]!.workspaceId).toBe(wsA);
+      expect(await withIdentity(handle.db, (tx) => tx.select().from(table))).toHaveLength(0);
+    }
+  });
+
+  it("refuses writes into another workspace or pointing at another workspace's deal", async () => {
+    const attempts = [
+      (tx: Tx) =>
+        tx
+          .insert(dealChecks)
+          .values({ workspaceId: wsB, dealId: dealOf[wsB]!, stageId: stageOf[wsB]! }),
+      (tx: Tx) =>
+        tx
+          .insert(dealChecks)
+          .values({ workspaceId: wsA, dealId: dealOf[wsB]!, stageId: stageOf[wsA]! }),
+      (tx: Tx) =>
+        tx.insert(dealFlagDismissals).values({
+          workspaceId: wsB,
+          dealId: dealOf[wsB]!,
+          flagId: "0123456789abcdef",
+          code: "stale",
+          reason: "x",
+        }),
+      (tx: Tx) =>
+        tx.insert(aiActions).values({
+          workspaceId: wsA,
+          userId: user,
+          kind: "deal_stage_move",
+          dealId: dealOf[wsB]!,
+          proposal: { body: "Move", citations: [] },
+          model: "rules",
+        }),
+    ];
+    for (const attempt of attempts) {
+      await expect(withTenant(handle.db, { workspaceId: wsA }, attempt)).rejects.toThrow();
+    }
+  });
+
+  it("checks and dismissals are append-only for the app; quotes are capped by the app, reasons here", async () => {
+    // A finished check can't be changed: the app may only complete a pending run.
+    await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.execute(sql`UPDATE deal_checks SET flags = '[{"id":"x"}]'::jsonb`),
+    );
+    const [done] = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.select().from(dealChecks),
+    );
+    expect(done!.flags).toEqual([]);
+    for (const statement of [
+      sql`UPDATE deal_checks SET ran_at = now()`,
+      sql`UPDATE deal_checks SET deal_id = deal_id`,
+      sql`DELETE FROM deal_checks`,
+      sql`UPDATE deal_flag_dismissals SET reason = 'x'`,
+      sql`DELETE FROM deal_flag_dismissals`,
+    ]) {
+      await expect(
+        withTenant(handle.db, { workspaceId: wsA }, (tx) => tx.execute(statement)),
+      ).rejects.toThrow();
+    }
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(dealFlagDismissals).values({
+          workspaceId: wsA,
+          dealId: dealOf[wsA]!,
+          flagId: "0123456789abcdef",
+          code: "stale",
+          reason: "x".repeat(301),
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("a pending run can be completed once, only in its own workspace (SEC-M1)", async () => {
+    const pending = await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      const [row] = await tx
+        .insert(dealChecks)
+        .values({
+          workspaceId: wsA,
+          dealId: dealOf[wsA]!,
+          stageId: stageOf[wsA]!,
+          status: "pending",
+          reservedCredits: 12,
+        })
+        .returning();
+      return row!.id;
+    });
+    // Another workspace can't touch it.
+    await withTenant(handle.db, { workspaceId: wsB }, (tx) =>
+      tx.execute(sql`UPDATE deal_checks SET status = 'done' WHERE id = ${pending}`),
+    );
+    const complete = (flags: string) =>
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.execute(
+          sql`UPDATE deal_checks SET status = 'done', reserved_credits = 0,
+                     flags = ${flags}::jsonb WHERE id = ${pending}`,
+        ),
+      );
+    await complete('[{"id":"first"}]');
+    await complete('[{"id":"second"}]');
+    const [row] = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx
+        .select()
+        .from(dealChecks)
+        .where(sql`id = ${pending}`),
+    );
+    expect(row).toMatchObject({ status: "done", reservedCredits: 0, flags: [{ id: "first" }] });
+    await expect(
+      withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+        tx.insert(dealChecks).values({
+          workspaceId: wsA,
+          dealId: dealOf[wsA]!,
+          stageId: stageOf[wsA]!,
+          reservedCredits: -1,
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("deleting an inbound email (or its contact) scrubs quotes taken from it (QA-M3)", async () => {
+    const setup = async (ws: string) =>
+      withTenant(handle.db, { workspaceId: ws }, async (tx) => {
+        const [c] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `quoted-${randomUUID()}@buyer.com` })
+          .returning();
+        const [keep] = await tx
+          .insert(contacts)
+          .values({ workspaceId: ws, email: `kept-${randomUUID()}@buyer.com` })
+          .returning();
+        const mail = async (contactId: string, text: string) => {
+          const [m] = await tx
+            .insert(messages)
+            .values({
+              workspaceId: ws,
+              contactId,
+              direction: "inbound",
+              messageIdHeader: `<${randomUUID()}@buyer.com>`,
+              subject: "Re",
+              bodyText: text,
+              status: "received",
+              receivedAt: new Date(),
+              sentAt: new Date(),
+            })
+            .returning();
+          return m!.id;
+        };
+        const gone = await mail(c!.id, "My home number is 555-0101 and we need this.");
+        const kept = await mail(keep!.id, "Budget is approved at $30k.");
+        const [check] = await tx
+          .insert(dealChecks)
+          .values({
+            workspaceId: ws,
+            dealId: dealOf[ws]!,
+            stageId: stageOf[ws]!,
+            deterministicOnly: false,
+            evidence: {
+              need_confirmed: {
+                present: "yes",
+                quote: "My home number is 555-0101",
+                messageId: gone,
+              },
+              budget_discussed: { present: "yes", quote: "Budget is approved", messageId: kept },
+              verbal_yes: { present: "unclear" },
+            },
+            flags: [
+              {
+                id: "00000000000000aa",
+                code: "criterion_missing",
+                severity: "medium",
+                message: "x",
+                quote: "we need this",
+                messageId: gone,
+              },
+              { id: "00000000000000bb", code: "stale", severity: "medium", message: "y" },
+            ],
+          })
+          .returning();
+        return { contactId: c!.id, checkId: check!.id, gone, kept };
+      });
+    const a = await setup(wsA);
+    const b = await setup(wsB);
+    await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx.delete(contacts).where(sql`id = ${a.contactId}`),
+    );
+    const [row] = await withTenant(handle.db, { workspaceId: wsA }, (tx) =>
+      tx
+        .select()
+        .from(dealChecks)
+        .where(sql`id = ${a.checkId}`),
+    );
+    expect(row!.evidence).toEqual({
+      need_confirmed: { present: "yes" },
+      budget_discussed: { present: "yes", quote: "Budget is approved", messageId: a.kept },
+      verbal_yes: { present: "unclear" },
+    });
+    expect(row!.flags).toEqual([
+      { id: "00000000000000aa", code: "criterion_missing", severity: "medium", message: "x" },
+      { id: "00000000000000bb", code: "stale", severity: "medium", message: "y" },
+    ]);
+    expect(JSON.stringify(row)).not.toContain("555-0101");
+    // The other workspace's checks are untouched.
+    const [other] = await withTenant(handle.db, { workspaceId: wsB }, (tx) =>
+      tx
+        .select()
+        .from(dealChecks)
+        .where(sql`id = ${b.checkId}`),
+    );
+    expect(JSON.stringify(other)).toContain("555-0101");
+  });
+
+  it("accepts deal_stage_move proposals, at most one open per deal", async () => {
+    const propose = (tx: Tx) =>
+      tx.insert(aiActions).values({
+        workspaceId: wsA,
+        userId: user,
+        kind: "deal_stage_move",
+        dealId: dealOf[wsA]!,
+        proposal: { body: "Move back", citations: [] },
+        model: "rules",
+      });
+    await withTenant(handle.db, { workspaceId: wsA }, propose);
+    await expect(withTenant(handle.db, { workspaceId: wsA }, propose)).rejects.toThrow();
+    await withTenant(handle.db, { workspaceId: wsA }, async (tx) => {
+      await tx
+        .update(aiActions)
+        .set({ status: "rejected" })
+        .where(sql`kind = 'deal_stage_move'`);
+      await propose(tx);
+    });
+  });
+
+  it("claim_due_reality_checks: open deals with new activity, once a day, leased, ids only", async () => {
+    const first = await claim();
+    expect(first.map((r) => r.deal_id).sort()).toEqual([dealOf[wsA], dealOf[wsB]].sort());
+    expect(Object.keys(first[0]!).sort()).toEqual(["deal_id", "workspace_id"]);
+    expect(await claim()).toEqual([]); // leased
+
+    const set = (ws: string, values: Partial<typeof deals.$inferInsert>) =>
+      withTenant(handle.db, { workspaceId: ws }, (tx) =>
+        tx
+          .update(deals)
+          .set(values)
+          .where(sql`id = ${dealOf[ws]!}`),
+      );
+    const dayAgo = new Date(Date.now() - 25 * 3_600_000);
+    // A: checked over a day ago with activity since → due. B: checked an hour ago → not due.
+    await set(wsA, {
+      realityLockedUntil: null,
+      realityCheckedAt: dayAgo,
+      lastActivityAt: new Date(dayAgo.getTime() + 60_000),
+    });
+    await set(wsB, {
+      realityLockedUntil: null,
+      realityCheckedAt: new Date(Date.now() - 3_600_000),
+      lastActivityAt: new Date(),
+    });
+    expect((await claim()).map((r) => r.deal_id)).toEqual([dealOf[wsA]]);
+
+    // No activity since the last check → not due; closed deals are never due.
+    await set(wsA, {
+      realityLockedUntil: null,
+      realityCheckedAt: dayAgo,
+      lastActivityAt: new Date(dayAgo.getTime() - 60_000),
+    });
+    expect(await claim()).toEqual([]);
+    await set(wsB, { realityLockedUntil: null, realityCheckedAt: null, stageId: wonOf[wsB]! });
+    expect(await claim()).toEqual([]);
+  });
+
+  it("the scheduler role can't read deal names or email bodies", async () => {
+    for (const statement of [
+      sql`SELECT name FROM deals`,
+      sql`SELECT body_text FROM messages`,
+      sql`SELECT subject FROM messages`,
+      sql`SELECT evidence FROM deal_checks`,
+    ]) {
+      await expect(
+        handle.db.transaction(async (tx) => {
+          await tx.execute(sql`SET LOCAL ROLE openline_scheduler`);
+          await tx.execute(statement);
+        }),
+      ).rejects.toThrow();
+    }
   });
 });

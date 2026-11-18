@@ -7,7 +7,7 @@ import { pageMetadata } from "@/lib/seo";
 export const metadata = pageMetadata({
   title: "Features",
   description:
-    "Contacts and CSV import, sequences with stop rules, reply detection and inbox, deliverability guardrails, compliance checks and Scout, an AI assistant that waits for your approval.",
+    "Contacts and CSV import, sequences with stop rules, reply detection and inbox, a deals pipeline with Reality Check, deliverability guardrails, compliance checks and Scout, an AI assistant that waits for your approval.",
   path: "/features",
 });
 
@@ -95,6 +95,29 @@ const groups: {
     ],
   },
   {
+    id: "pipeline",
+    title: "Pipeline",
+    intro: "Turn replies into deals and keep the forecast honest.",
+    items: [
+      {
+        title: "Deals board",
+        body: "One board for the team: drag deals between stages (or use the Move menu from the keyboard), with counts, totals and weighted totals per stage.",
+      },
+      {
+        title: "Create a deal from a reply",
+        body: "“Create deal” on a reply fills in the contact, the company and a name. Deals can also start from a contact or company page.",
+      },
+      {
+        title: "Pipeline Reality Check",
+        body: "Scout compares each deal's stage with what your emails actually say and flags the gaps, quoting the email. It suggests a stage; nothing moves until you accept.",
+      },
+      {
+        title: "Stale deals and forecast",
+        body: "Deals that go quiet are marked Stale and listed on Today. The forecast strip shows open, weighted and closing this month and quarter.",
+      },
+    ],
+  },
+  {
     id: "deliverability",
     title: "Deliverability",
     intro: "Sending behaviour that inbox providers trust.",
@@ -171,7 +194,6 @@ const groups: {
 
 const comingSoon = [
   "Outlook / Microsoft 365 mailboxes",
-  "Pipeline and deals",
   "Browser calling",
   "HubSpot and Pipedrive sync",
   "Mailbox warm-up",

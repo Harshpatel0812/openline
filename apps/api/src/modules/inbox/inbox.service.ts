@@ -54,6 +54,7 @@ import { ApiException, notFound } from "../../common/http";
 import { CONFIG, type AppConfig } from "../../config";
 import { DB } from "../../database/database.module";
 import { AuditService } from "../audit/audit.service";
+import { dealPrefill } from "../deals/deals.service";
 import { PromiseKeeperService } from "../promises/promise-keeper.service";
 import { replyRefusal } from "./reply-compliance";
 import { decodeCursor, encodeCursor } from "../contacts/contacts.service";
@@ -279,6 +280,12 @@ export class InboxService {
       referral: m.referral ?? null,
       replies: replies.map((r) => ({ ...r, sentAt: r.sentAt.toISOString() })),
       openUrl: gmailOpenUrl(row.mailbox.email, m.providerThreadId),
+      dealPrefill: await dealPrefill(
+        tx,
+        ws,
+        row.contact?.id ? row.contact : null,
+        row.company?.id ? row.company : null,
+      ),
     };
   }
 

@@ -33,11 +33,12 @@ const mainNav: NavItem[] = [
   { label: "Contacts", href: "/app/contacts" },
   { label: "Companies", href: "/app/companies" },
   { label: "Sequences", href: "/app/sequences" },
-  { label: "Pipeline", soon: true },
+  { label: "Deals", href: "/app/deals" },
 ];
 
 const settingsNav: NavItem[] = [
   { label: "Workspace", href: "/app/settings/workspace" },
+  { label: "Pipeline", href: "/app/settings/pipeline" },
   { label: "Mailboxes", href: "/app/settings/mailboxes" },
   { label: "Team", href: "/app/settings/team" },
   { label: "Suppressions", href: "/app/settings/suppressions" },
@@ -280,7 +281,7 @@ function WorkspaceSwitcher() {
 
   if (me.workspaces.length <= 1) {
     return (
-      <span className="max-w-[12rem] truncate text-sm font-medium text-slate-800 dark:text-slate-200">
+      <span className="max-w-[7rem] truncate text-sm font-medium sm:max-w-[12rem] text-slate-800 dark:text-slate-200">
         {me.workspace.name}
       </span>
     );
@@ -308,7 +309,7 @@ function WorkspaceSwitcher() {
         value={me.workspace.id}
         disabled={switching}
         onChange={(e) => void onChange(e.target.value)}
-        className="h-9 max-w-[12rem]"
+        className="h-9 max-w-[7rem] sm:max-w-[12rem]"
       >
         {me.workspaces.map((w) => (
           <option key={w.id} value={w.id}>
@@ -436,7 +437,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="lg:hidden">
               <Logo href="/app" />
             </div>
-            <div className="ml-auto flex items-center gap-3">
+            <div className="ml-auto flex min-w-0 items-center gap-3">
               <span className="hidden sm:inline-flex">
                 <TrialBadge />
               </span>

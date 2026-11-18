@@ -8,3 +8,5 @@ export * from "./scout";
 export * from "./contact";
 export * from "./compliance";
 export * from "./tasks";
+export * from "./deals";
+export * from "./reality";

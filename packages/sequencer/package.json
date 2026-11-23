@@ -19,7 +19,7 @@
   "devDependencies": {
     "@openline/config": "workspace:*",
     "@types/smtp-server": "^3.5.13",
-    "smtp-server": "^3.21.4",
+    "smtp-server": "^3.21.7",
     "typescript": "^5.7.2",
     "vitest": "^3.0.0"
   }

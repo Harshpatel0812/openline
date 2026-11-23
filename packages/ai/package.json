@@ -16,7 +16,7 @@
   "devDependencies": {
     "@openline/config": "workspace:*",
     "typescript": "^5.7.2",
-    "vitest": "^3.0.0"
+    "vitest": "^5.1.1"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1169.0",

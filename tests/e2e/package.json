@@ -8,6 +8,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "smtp-server": "^3.21.4"
+    "smtp-server": "^3.21.7"
   }
 }

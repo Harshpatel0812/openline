@@ -30,7 +30,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@nestjs/testing": "^11.0.0",
+    "@nestjs/testing": "^12.6.0",
     "@openline/config": "workspace:*",
     "@swc/core": "^1.16.22",
     "@types/cookie-parser": "^1.4.10",
